@@ -11,7 +11,9 @@ A production-ready, lightweight Rust-based LDAP authentication service with REST
 - 🚀 **REST API** for CRUD operations on users and groups
 - �️ **CLI Tool** bundled with Docker image for easy API interaction
 - 🔐 **Bearer Token Authentication** protecting all API endpoints  
-- 📂 **LDAP Interface** supporting bind, search, whoami, unbind operations- 🔒 **LDAP Search Authorization** - restrict search operations to specific organizations- 💾 **Redis Backend** with connection pooling and caching
+- 📂 **LDAP Interface** supporting bind, search, whoami, unbind operations
+- 🔒 **LDAP Search Authorization** - restrict search operations to specific organizations
+- 💾 **Redis Backend** with connection pooling and caching
 - 🔒 **TLS Support** for both API and LDAP servers
 - 📊 **Prometheus Metrics** for production monitoring
 - 📝 **Audit Logging** for compliance and security

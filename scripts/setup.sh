@@ -39,6 +39,15 @@ if command -v docker &> /dev/null; then
     echo "✅ Redis is running on localhost:6379"
 fi
 
+# Install git hooks
+echo "🪝 Installing git hooks..."
+if [ -d .git ]; then
+    git config core.hooksPath .githooks
+    echo "✅ Git hooks installed (pre-commit will run cargo fmt)"
+else
+    echo "⚠️  Not a git repository, skipping hooks installation"
+fi
+
 # Build the project
 echo "🔨 Building the project..."
 cargo build
