@@ -56,11 +56,12 @@ enum LdapResultCode {
 pub struct LdapServer {
     db: Arc<dyn DbService>,
     base_dn: String,
+    search_bind_org: Option<String>,
 }
 
 impl LdapServer {
-    pub fn new(db: Arc<dyn DbService>, base_dn: String) -> Self {
-        Self { db, base_dn }
+    pub fn new(db: Arc<dyn DbService>, base_dn: String, search_bind_org: Option<String>) -> Self {
+        Self { db, base_dn, search_bind_org }
     }
 
     /// Start the LDAP server
@@ -77,9 +78,10 @@ impl LdapServer {
                     info!("New LDAP connection from {}", addr);
                     let db = self.db.clone();
                     let base_dn = self.base_dn.clone();
+                    let search_bind_org = self.search_bind_org.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, db, base_dn).await {
+                        if let Err(e) = handle_connection(socket, db, base_dn, search_bind_org).await {
                             error!("Error handling LDAP connection: {}", e);
                         }
                     });
@@ -107,11 +109,12 @@ impl LdapServer {
                     let acceptor = acceptor.clone();
                     let db = self.db.clone();
                     let base_dn = self.base_dn.clone();
+                    let search_bind_org = self.search_bind_org.clone();
 
                     tokio::spawn(async move {
                         match acceptor.accept(socket).await {
                             Ok(tls_stream) => {
-                                if let Err(e) = handle_tls_connection(tls_stream, db, base_dn).await
+                                if let Err(e) = handle_tls_connection(tls_stream, db, base_dn, search_bind_org).await
                                 {
                                     error!("Error handling TLS LDAP connection: {}", e);
                                 }
@@ -134,6 +137,7 @@ async fn handle_connection(
     mut socket: TcpStream,
     db: Arc<dyn DbService>,
     base_dn: String,
+    search_bind_org: Option<String>,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
     let mut authenticated_user: Option<String> = None;
@@ -185,6 +189,7 @@ async fn handle_connection(
                             &db,
                             &base_dn,
                             &authenticated_org,
+                            &search_bind_org,
                         )
                         .await
                     }
@@ -224,6 +229,7 @@ async fn handle_tls_connection(
     mut socket: tokio_rustls::server::TlsStream<TcpStream>,
     db: Arc<dyn DbService>,
     base_dn: String,
+    search_bind_org: Option<String>,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
     let mut authenticated_user: Option<String> = None;
@@ -275,6 +281,7 @@ async fn handle_tls_connection(
                             &db,
                             &base_dn,
                             &authenticated_org,
+                            &search_bind_org,
                         )
                         .await
                     }
@@ -552,6 +559,7 @@ async fn handle_search_request(
     db: &Arc<dyn DbService>,
     base_dn: &str,
     authenticated_org: &Option<String>,
+    search_bind_org: &Option<String>,
 ) -> Vec<u8> {
     debug!("Processing search request");
 
@@ -567,6 +575,21 @@ async fn handle_search_request(
             );
         }
     };
+
+    // Check if authenticated org matches the search bind org (if configured)
+    if let Some(required_org) = search_bind_org {
+        if org != required_org {
+            warn!(
+                "Search attempted by organization '{}' but only '{}' is authorized",
+                org, required_org
+            );
+            return create_error_response(
+                message_id,
+                5,
+                LdapResultCode::InsufficientAccessRights as u8,
+            );
+        }
+    }
 
     // In a full implementation, we would parse the search filter, base DN, scope, etc.
     // For now, we'll return all users in the organization as a simple search result
@@ -1186,10 +1209,11 @@ mod tests {
         let db = Arc::new(mock_db) as Arc<dyn DbService>;
         let base_dn = "dc=example,dc=com";
         let auth_org = Some("acme".to_string());
+        let search_bind_org = None; // No restriction in this test
 
         let payload = vec![]; // Simplified - normally would contain search params
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org).await;
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
 
@@ -1204,15 +1228,72 @@ mod tests {
         let db = Arc::new(mock_db) as Arc<dyn DbService>;
         let base_dn = "dc=example,dc=com";
         let auth_org = None;
+        let search_bind_org = None;
 
         let payload = vec![];
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org).await;
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
         // Should return error response for insufficient access rights
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_wrong_organization() {
+        let mock_db = MockDbService::new();
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = Some("acme".to_string()); // User is from "acme"
+        let search_bind_org = Some("allowed_org".to_string()); // But only "allowed_org" can search
+
+        let payload = vec![];
+
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+
+        assert!(!response.is_empty());
+        // Should return error response for insufficient access rights
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_authorized_organization() {
+        let mut mock_db = MockDbService::new();
+
+        let now = Utc::now();
+        let test_users = vec![
+            User {
+                organization: "allowed_org".to_string(),
+                username: "search_user".to_string(),
+                password_hash: "hash".to_string(),
+                email: Some("search@allowed.com".to_string()),
+                full_name: Some("Search User".to_string()),
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        mock_db
+            .expect_list_users()
+            .with(mockall::predicate::eq("allowed_org"))
+            .times(1)
+            .returning(move |_| Ok(test_users.clone()));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = Some("allowed_org".to_string()); // User is from "allowed_org"
+        let search_bind_org = Some("allowed_org".to_string()); // Only "allowed_org" can search
+
+        let payload = vec![];
+
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+
+        assert!(!response.is_empty());
+        // Should successfully return search results
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("search_user") || response.len() > 100);
     }
 
     #[tokio::test]

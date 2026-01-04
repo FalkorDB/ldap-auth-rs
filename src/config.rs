@@ -10,6 +10,7 @@ pub struct Config {
     pub api_port: u16,
     pub ldap_port: u16,
     pub ldap_base_dn: String,
+    pub ldap_search_bind_org: Option<String>,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
     pub enable_tls: bool,
@@ -40,6 +41,7 @@ impl Config {
                 .unwrap_or(3389), // Non-privileged port
             ldap_base_dn: env::var("LDAP_BASE_DN")
                 .unwrap_or_else(|_| "dc=example,dc=com".to_string()),
+            ldap_search_bind_org: env::var("LDAP_SEARCH_BIND_ORG").ok(),
             tls_cert_path: env::var("TLS_CERT_PATH").ok(),
             tls_key_path: env::var("TLS_KEY_PATH").ok(),
             enable_tls,

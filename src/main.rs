@@ -121,9 +121,10 @@ async fn main() -> anyhow::Result<()> {
     let ldap_db = db.clone();
     let ldap_addr = config.ldap_address();
     let base_dn = config.ldap_base_dn.clone();
+    let search_bind_org = config.ldap_search_bind_org.clone();
     let ldap_config = config.clone();
     let _ldap_handle = tokio::spawn(async move {
-        let ldap_server = ldap::LdapServer::new(ldap_db, base_dn);
+        let ldap_server = ldap::LdapServer::new(ldap_db, base_dn, search_bind_org);
 
         if ldap_config.enable_tls {
             if let (Some(cert_path), Some(key_path)) =

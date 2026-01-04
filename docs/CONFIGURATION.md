@@ -17,6 +17,8 @@
 | `API_PORT` | `8080` | API server port |
 | `LDAP_HOST` | `0.0.0.0` | LDAP server bind address |
 | `LDAP_PORT` | `3893` | LDAP server port |
+| `LDAP_BASE_DN` | `dc=example,dc=com` | LDAP base DN |
+| `LDAP_SEARCH_BIND_ORG` | - | Organization authorized to perform LDAP searches (see LDAP Search Authorization) |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
 | `TLS_CERT_PATH` | - | Path to TLS certificate (enables TLS) |
 | `TLS_KEY_PATH` | - | Path to TLS private key (enables TLS) |
@@ -260,6 +262,59 @@ LDAP_PORT=636
 RUST_LOG=warn
 TLS_CERT_PATH=/etc/ssl/certs/prod.crt
 TLS_KEY_PATH=/etc/ssl/private/prod.key
+```
+
+## LDAP Search Authorization
+
+By default, any authenticated LDAP user can perform search operations. To restrict search access to a specific organization (useful for service accounts), set the `LDAP_SEARCH_BIND_ORG` environment variable:
+
+```bash
+export LDAP_SEARCH_BIND_ORG="service_accounts"
+```
+
+### How It Works
+
+1. **Without `LDAP_SEARCH_BIND_ORG`**: Any user who successfully binds (authenticates) can search for users and groups
+2. **With `LDAP_SEARCH_BIND_ORG`**: Only users from the specified organization can perform searches
+
+### Use Case Example
+
+Similar to Valkey-LDAP module's `ldap.search_bind_dn` configuration:
+
+```bash
+# Create a service organization for LDAP search operations
+export LDAP_SEARCH_BIND_ORG="ldap_service"
+
+# Then create a user in this organization via the API
+curl -X POST http://localhost:8080/api/v1/organizations/ldap_service/users \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "search_user",
+    "password": "secure_password",
+    "email": "search@service.com"
+  }'
+```
+
+Now only `cn=search_user,ou=ldap_service,dc=example,dc=com` can perform LDAP searches. Other users can still bind but cannot search.
+
+### Configuration in LDAP Clients
+
+Configure your LDAP client to use the search bind user:
+
+```properties
+# Example: Valkey LDAP module configuration
+ldap.search_bind_dn "cn=search_user,ou=ldap_service,dc=example,dc=com"
+ldap.search_bind_passwd "secure_password"
+```
+
+```yaml
+# Example: Application LDAP config
+ldap:
+  url: ldap://localhost:3389
+  bind_dn: cn=search_user,ou=ldap_service,dc=example,dc=com
+  bind_password: secure_password
+  base_dn: dc=example,dc=com
 ```
 
 ## Troubleshooting
