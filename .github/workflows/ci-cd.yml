@@ -116,7 +116,7 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [test, security]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'release' 
     
     steps:
       - name: Checkout code
@@ -194,7 +194,7 @@ jobs:
     name: Deploy Notification
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'release'
     
     steps:
       - name: Deployment notification
