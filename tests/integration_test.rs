@@ -1,8 +1,4 @@
-use ldap_auth_rs::{
-    api,
-    db::DbService,
-    redis_db::RedisDbService,
-};
+use ldap_auth_rs::{api, db::DbService, redis_db::RedisDbService};
 use reqwest::Client;
 use serde_json::json;
 use std::sync::Arc;

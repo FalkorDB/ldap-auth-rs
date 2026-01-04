@@ -61,7 +61,11 @@ pub struct LdapServer {
 
 impl LdapServer {
     pub fn new(db: Arc<dyn DbService>, base_dn: String, search_bind_org: Option<String>) -> Self {
-        Self { db, base_dn, search_bind_org }
+        Self {
+            db,
+            base_dn,
+            search_bind_org,
+        }
     }
 
     /// Start the LDAP server
@@ -81,7 +85,9 @@ impl LdapServer {
                     let search_bind_org = self.search_bind_org.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(socket, db, base_dn, search_bind_org).await {
+                        if let Err(e) =
+                            handle_connection(socket, db, base_dn, search_bind_org).await
+                        {
                             error!("Error handling LDAP connection: {}", e);
                         }
                     });
@@ -114,7 +120,9 @@ impl LdapServer {
                     tokio::spawn(async move {
                         match acceptor.accept(socket).await {
                             Ok(tls_stream) => {
-                                if let Err(e) = handle_tls_connection(tls_stream, db, base_dn, search_bind_org).await
+                                if let Err(e) =
+                                    handle_tls_connection(tls_stream, db, base_dn, search_bind_org)
+                                        .await
                                 {
                                     error!("Error handling TLS LDAP connection: {}", e);
                                 }
@@ -1202,7 +1210,8 @@ mod tests {
 
         let payload = vec![]; // Simplified - normally would contain search params
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+        let response =
+            handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
 
@@ -1221,7 +1230,8 @@ mod tests {
 
         let payload = vec![];
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+        let response =
+            handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
         // Should return error response for insufficient access rights
@@ -1239,7 +1249,8 @@ mod tests {
 
         let payload = vec![];
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+        let response =
+            handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
         // Should return error response for insufficient access rights
@@ -1252,17 +1263,15 @@ mod tests {
         let mut mock_db = MockDbService::new();
 
         let now = Utc::now();
-        let test_users = vec![
-            User {
-                organization: "allowed_org".to_string(),
-                username: "search_user".to_string(),
-                password_hash: "hash".to_string(),
-                email: Some("search@allowed.com".to_string()),
-                full_name: Some("Search User".to_string()),
-                created_at: now,
-                updated_at: now,
-            },
-        ];
+        let test_users = vec![User {
+            organization: "allowed_org".to_string(),
+            username: "search_user".to_string(),
+            password_hash: "hash".to_string(),
+            email: Some("search@allowed.com".to_string()),
+            full_name: Some("Search User".to_string()),
+            created_at: now,
+            updated_at: now,
+        }];
 
         mock_db
             .expect_list_users()
@@ -1277,7 +1286,8 @@ mod tests {
 
         let payload = vec![];
 
-        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
+        let response =
+            handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
         // Should successfully return search results

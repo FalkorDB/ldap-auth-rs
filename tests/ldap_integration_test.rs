@@ -1,6 +1,5 @@
 use ldap_auth_rs::{
-    db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService,
-    tls,
+    db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService, tls,
 };
 use rustls::{ClientConfig, RootCertStore, ServerName};
 use std::io::BufReader;
