@@ -184,8 +184,6 @@ async fn handle_connection(
                     }
                     2 => {
                         // Unbind Request
-                        authenticated_user = None;
-                        authenticated_org = None;
                         debug!("User unbound");
                         return Ok(());
                     }
@@ -276,8 +274,6 @@ async fn handle_tls_connection(
                     }
                     2 => {
                         // Unbind Request
-                        authenticated_user = None;
-                        authenticated_org = None;
                         debug!("User unbound");
                         return Ok(());
                     }

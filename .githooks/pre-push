@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Pre-push hook to run cargo clippy before pushing
+
+set -e
+
+echo "Running cargo clippy..."
+
+# Run clippy with strict warnings
+cargo clippy --all-targets --all-features -- -D warnings
+
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ Clippy check failed!"
+    echo "Please fix all warnings before pushing."
+    echo "Run: cargo clippy --all-targets --all-features -- -D warnings"
+    exit 1
+fi
+
+echo "✅ Clippy check passed!"
+
+exit 0

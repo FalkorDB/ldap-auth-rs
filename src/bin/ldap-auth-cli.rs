@@ -222,6 +222,7 @@ struct AddMemberRequest {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ApiResponse<T> {
     success: bool,
     data: Option<T>,

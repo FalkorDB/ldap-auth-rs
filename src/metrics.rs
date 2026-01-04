@@ -19,6 +19,7 @@ pub mod custom {
     use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
 
     /// Authentication attempts counter (success/failure)
+    #[allow(dead_code)]
     pub static AUTH_ATTEMPTS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
             "ldap_auth_attempts_total",
@@ -29,6 +30,7 @@ pub mod custom {
     });
 
     /// LDAP bind operations counter
+    #[allow(dead_code)]
     pub static LDAP_BINDS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
             "ldap_bind_operations_total",
@@ -39,6 +41,7 @@ pub mod custom {
     });
 
     /// Redis operation latency histogram
+    #[allow(dead_code)]
     pub static REDIS_OPERATION_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
         register_histogram_vec!(
             "redis_operation_duration_seconds",
@@ -50,6 +53,7 @@ pub mod custom {
     });
 
     /// User operations counter (create, update, delete)
+    #[allow(dead_code)]
     pub static USER_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
             "user_operations_total",
@@ -60,6 +64,7 @@ pub mod custom {
     });
 
     /// Group operations counter (create, update, delete, membership changes)
+    #[allow(dead_code)]
     pub static GROUP_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
             "group_operations_total",
@@ -71,6 +76,7 @@ pub mod custom {
 }
 
 /// Helper function to record authentication attempts
+#[allow(dead_code)]
 pub fn record_auth_attempt(org: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::AUTH_ATTEMPTS
@@ -79,12 +85,14 @@ pub fn record_auth_attempt(org: &str, success: bool) {
 }
 
 /// Helper function to record LDAP bind operations
+#[allow(dead_code)]
 pub fn record_ldap_bind(org: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::LDAP_BINDS.with_label_values(&[org, result]).inc();
 }
 
 /// Helper function to record user operations
+#[allow(dead_code)]
 pub fn record_user_operation(org: &str, operation: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::USER_OPERATIONS
@@ -93,6 +101,7 @@ pub fn record_user_operation(org: &str, operation: &str, success: bool) {
 }
 
 /// Helper function to record group operations
+#[allow(dead_code)]
 pub fn record_group_operation(org: &str, operation: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::GROUP_OPERATIONS

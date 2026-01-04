@@ -55,6 +55,7 @@ pub async fn validate_bearer_token(
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AuthError {
     MissingToken,
     InvalidToken,

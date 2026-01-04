@@ -43,7 +43,9 @@ fi
 echo "🪝 Installing git hooks..."
 if [ -d .git ]; then
     git config core.hooksPath .githooks
-    echo "✅ Git hooks installed (pre-commit will run cargo fmt)"
+    echo "✅ Git hooks installed:"
+    echo "   - pre-commit: runs cargo fmt"
+    echo "   - pre-push: runs cargo clippy"
 else
     echo "⚠️  Not a git repository, skipping hooks installation"
 fi

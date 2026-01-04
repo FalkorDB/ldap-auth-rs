@@ -80,9 +80,11 @@ pub trait DbService: Send + Sync {
     // LDAP-specific operations
 
     /// Search for users matching a filter
+    #[allow(dead_code)]
     async fn search_users(&self, organization: &str, filter: &str) -> Result<Vec<User>>;
 
     /// Search for groups matching a filter
+    #[allow(dead_code)]
     async fn search_groups(&self, organization: &str, filter: &str) -> Result<Vec<Group>>;
 
     /// Health check for the database connection
