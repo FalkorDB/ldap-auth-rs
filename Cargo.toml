@@ -14,9 +14,10 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 
 # TLS support
-rustls = "0.21"
-tokio-rustls = "0.24"
-rustls-pemfile = "1.0"
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2.2"
+rustls-pki-types = "1"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -46,7 +47,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Metrics
-prometheus = "0.13"
+prometheus = "0.14"
 axum-prometheus = "0.6"
 
 # Utilities
@@ -56,11 +57,11 @@ once_cell = "1.19"
 
 # CLI dependencies
 clap = { version = "4.5", features = ["derive", "env"] }
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 [dev-dependencies]
 # Testing
 mockall = "0.12"
 testcontainers = "0.15"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 tokio-test = "0.4"

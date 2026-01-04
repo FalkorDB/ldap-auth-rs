@@ -1,4 +1,5 @@
-use rustls::{Certificate, PrivateKey, ServerConfig};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::ServerConfig;
 use rustls_pemfile::{certs, pkcs8_private_keys};
 use std::fs::File;
 use std::io::BufReader;
@@ -12,11 +13,9 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
     let cert_file = File::open(cert_path)
         .map_err(|e| AppError::Internal(format!("Failed to open certificate file: {}", e)))?;
     let mut cert_reader = BufReader::new(cert_file);
-    let certs: Vec<Certificate> = certs(&mut cert_reader)
-        .map_err(|e| AppError::Internal(format!("Failed to parse certificates: {}", e)))?
-        .into_iter()
-        .map(Certificate)
-        .collect();
+    let certs: Vec<CertificateDer<'static>> = certs(&mut cert_reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Internal(format!("Failed to parse certificates: {}", e)))?;
 
     if certs.is_empty() {
         return Err(AppError::Internal(
@@ -28,11 +27,9 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
     let key_file = File::open(key_path)
         .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
     let mut key_reader = BufReader::new(key_file);
-    let mut keys: Vec<PrivateKey> = pkcs8_private_keys(&mut key_reader)
-        .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?
-        .into_iter()
-        .map(PrivateKey)
-        .collect();
+    let mut keys = pkcs8_private_keys(&mut key_reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?;
 
     if keys.is_empty() {
         return Err(AppError::Internal(
@@ -40,11 +37,10 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
         ));
     }
 
-    let key = keys.remove(0);
+    let key = PrivateKeyDer::Pkcs8(keys.remove(0));
 
     // Build TLS config
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| AppError::Internal(format!("Failed to build TLS config: {}", e)))?;
