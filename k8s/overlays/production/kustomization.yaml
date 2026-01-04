@@ -1,0 +1,38 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ldap-auth-prod
+
+namePrefix: prod-
+nameSuffix: ""
+
+commonLabels:
+  environment: production
+
+resources:
+- ../../base
+# Ingress disabled by default (internal service)
+# Uncomment if external access is required:
+# - ingress.yaml
+
+patches:
+- path: deployment-patch.yaml
+- path: hpa-patch.yaml
+- path: redis-patch.yaml
+
+configMapGenerator:
+- name: ldap-auth-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=warn
+  - RUST_LOG=ldap_auth_rs=info
+  - CACHE_TTL=600
+  - CACHE_MAX_SIZE=50000
+
+images:
+- name: ldap-auth-rs
+  newTag: latest
+
+replicas:
+- name: ldap-auth-rs
+  count: 3

@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldap-auth-rs
+spec:
+  template:
+    spec:
+      containers:
+      - name: ldap-auth-rs
+        resources:
+          requests:
+            cpu: 75m
+            memory: 96Mi
+          limits:
+            cpu: 300m
+            memory: 384Mi

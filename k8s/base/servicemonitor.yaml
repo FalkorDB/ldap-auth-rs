@@ -1,0 +1,18 @@
+# ServiceMonitor for Prometheus Operator
+# Only applies if Prometheus Operator is installed in the cluster
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ldap-auth-metrics
+  labels:
+    app.kubernetes.io/component: monitoring
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: application
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s

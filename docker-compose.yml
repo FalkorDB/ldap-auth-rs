@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ldap-auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "3389:3389"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - API_PORT=8080
+      - LDAP_PORT=3389
+      - LDAP_BASE_DN=dc=example,dc=com
+      - RUST_LOG=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:

@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ldap-auth
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - redis-pvc.yaml
+  - networkpolicy.yaml
+  - poddisruptionbudget.yaml
+  - servicemonitor.yaml
+
+# Note: redis-backup.yaml and redis-restore.yaml removed for simplicity
+# For Redis backups, use your cloud provider's native backup solutions:
+# - AWS: EBS snapshots, AWS Backup
+# - GCP: Persistent disk snapshots, scheduled snapshots
+# - Azure: Disk snapshots, Azure Backup
+
+commonLabels:
+  app.kubernetes.io/name: ldap-auth-rs
+  app.kubernetes.io/part-of: ldap-auth-system
+
+# Removed secretGenerator as StringSecret CRD handles secret generation
+# If StringSecret operator is not available, uncomment the fallback Secret in secret.yaml

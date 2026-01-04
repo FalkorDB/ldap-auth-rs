@@ -1,0 +1,23 @@
+# This file is included for documentation purposes
+# The actual PVC is created via volumeClaimTemplates in redis-deployment.yaml
+# 
+# VolumeSnapshotClass is configured per cloud provider in components/
+# See: components/aws/, components/gcp/, components/azure/
+#
+# If you prefer to use a standalone Redis with pre-created PVC instead of StatefulSet,
+# you can use this manifest:
+#
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: redis-data
+#   labels:
+#     app.kubernetes.io/component: cache
+#     app.kubernetes.io/name: redis
+# spec:
+#   accessModes:
+#   - ReadWriteOnce
+#   resources:
+#     requests:
+#       storage: 5Gi
+#   # storageClassName: standard

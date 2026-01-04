@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldap-auth-config
+  labels:
+    app.kubernetes.io/component: config
+data:
+  # Application configuration
+  LOG_LEVEL: "info"
+  RUST_LOG: "ldap_auth_rs=info"
+  SERVER_HOST: "0.0.0.0"
+  SERVER_PORT: "8080"
+  
+  # Cache configuration
+  CACHE_TTL: "300"
+  CACHE_MAX_SIZE: "10000"
+  
+  # Redis configuration
+  REDIS_URL: "redis://redis-service:6379"
+  REDIS_POOL_SIZE: "10"
+  REDIS_TIMEOUT: "5"

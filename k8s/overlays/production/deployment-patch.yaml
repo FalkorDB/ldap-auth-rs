@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldap-auth-rs
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: ldap-auth-rs
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: application
+            topologyKey: kubernetes.io/hostname

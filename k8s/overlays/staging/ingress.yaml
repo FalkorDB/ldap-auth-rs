@@ -1,0 +1,28 @@
+# Ingress is DISABLED by default (internal service only)
+# Uncomment this file and add it to kustomization.yaml if external access is required
+#
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: ldap-auth-ingress
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+#     nginx.ingress.kubernetes.io/ssl-redirect: "true"
+#     cert-manager.io/cluster-issuer: "letsencrypt-staging"
+# spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - ldap-auth-staging.example.com
+    secretName: ldap-auth-tls-staging
+  rules:
+  - host: ldap-auth-staging.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: ldap-auth-service
+            port:
+              number: 8080

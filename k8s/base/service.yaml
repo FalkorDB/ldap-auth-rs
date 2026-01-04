@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldap-auth-service
+  labels:
+    app.kubernetes.io/component: application
+  annotations:
+    # Internal service - not exposed externally
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: application
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: ldap
+    port: 3389
+    targetPort: ldap
+    protocol: TCP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldap-auth-headless
+  labels:
+    app.kubernetes.io/component: application
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: application
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: ldap
+    port: 3389
+    targetPort: ldap
+    protocol: TCP

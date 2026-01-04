@@ -1,0 +1,1208 @@
+use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_rustls::TlsAcceptor;
+use rustls::ServerConfig;
+use tracing::{debug, error, info, warn};
+
+use crate::db::DbService;
+use crate::error::Result;
+
+/// LDAP message types
+#[derive(Debug)]
+#[allow(dead_code)]
+enum LdapOp {
+    BindRequest = 0,
+    BindResponse = 1,
+    UnbindRequest = 2,
+    SearchRequest = 3,
+    SearchResultEntry = 4,
+    SearchResultDone = 5,
+    ModifyRequest = 6,
+    ModifyResponse = 7,
+    AddRequest = 8,
+    AddResponse = 9,
+    DelRequest = 10,
+    DelResponse = 11,
+    ModifyDNRequest = 12,
+    ModifyDNResponse = 13,
+    CompareRequest = 14,
+    CompareResponse = 15,
+    AbandonRequest = 16,
+    ExtendedRequest = 23,
+    ExtendedResponse = 24,
+}
+
+/// LDAP result codes
+#[allow(dead_code)]
+enum LdapResultCode {
+    Success = 0,
+    OperationsError = 1,
+    ProtocolError = 2,
+    TimeLimitExceeded = 3,
+    SizeLimitExceeded = 4,
+    CompareFalse = 5,
+    CompareTrue = 6,
+    AuthMethodNotSupported = 7,
+    StrongAuthRequired = 8,
+    InvalidCredentials = 49,
+    InsufficientAccessRights = 50,
+    Busy = 51,
+    Unavailable = 52,
+    UnwillingToPerform = 53,
+    Other = 80,
+}
+
+pub struct LdapServer {
+    db: Arc<dyn DbService>,
+    base_dn: String,
+}
+
+impl LdapServer {
+    pub fn new(db: Arc<dyn DbService>, base_dn: String) -> Self {
+        Self { db, base_dn }
+    }
+
+    /// Start the LDAP server
+    pub async fn run(&self, addr: &str) -> Result<()> {
+        let listener = TcpListener::bind(addr).await
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to bind LDAP server: {}", e)))?;
+        
+        info!("LDAP server listening on {}", addr);
+
+        loop {
+            match listener.accept().await {
+                Ok((socket, addr)) => {
+                    info!("New LDAP connection from {}", addr);
+                    let db = self.db.clone();
+                    let base_dn = self.base_dn.clone();
+                    
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_connection(socket, db, base_dn).await {
+                            error!("Error handling LDAP connection: {}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to accept LDAP connection: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Start the LDAP server with TLS
+    pub async fn run_with_tls(&self, addr: &str, tls_config: Arc<ServerConfig>) -> Result<()> {
+        let listener = TcpListener::bind(addr).await
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to bind LDAP server: {}", e)))?;
+        
+        let acceptor = TlsAcceptor::from(tls_config);
+        info!("LDAP server with TLS listening on {}", addr);
+
+        loop {
+            match listener.accept().await {
+                Ok((socket, client_addr)) => {
+                    info!("New LDAP connection from {}", client_addr);
+                    let acceptor = acceptor.clone();
+                    let db = self.db.clone();
+                    let base_dn = self.base_dn.clone();
+                    
+                    tokio::spawn(async move {
+                        match acceptor.accept(socket).await {
+                            Ok(tls_stream) => {
+                                if let Err(e) = handle_tls_connection(tls_stream, db, base_dn).await {
+                                    error!("Error handling TLS LDAP connection: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                error!("TLS handshake failed: {}", e);
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    error!("Failed to accept LDAP connection: {}", e);
+                }
+            }
+        }
+    }
+}
+
+async fn handle_connection(
+    mut socket: TcpStream,
+    db: Arc<dyn DbService>,
+    base_dn: String,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 8192];
+    let mut authenticated_user: Option<String> = None;
+    let mut authenticated_org: Option<String> = None;
+
+    loop {
+        let n = socket.read(&mut buffer).await
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to read from socket: {}", e)))?;
+
+        if n == 0 {
+            debug!("Client disconnected");
+            return Ok(());
+        }
+
+        let request = &buffer[..n];
+        debug!("Received {} bytes", n);
+
+        // Parse LDAP message (simplified)
+        match parse_ldap_message(request) {
+            Ok((message_id, op_type, payload)) => {
+                debug!("Message ID: {}, Op: {:?}", message_id, op_type);
+
+                let response = match op_type {
+                    0 => {
+                        // Bind Request
+                        handle_bind_request(
+                            message_id,
+                            payload,
+                            &db,
+                            &base_dn,
+                            &mut authenticated_user,
+                            &mut authenticated_org,
+                        ).await
+                    }
+                    2 => {
+                        // Unbind Request
+                        authenticated_user = None;
+                        authenticated_org = None;
+                        debug!("User unbound");
+                        return Ok(());
+                    }
+                    3 => {
+                        // Search Request
+                        handle_search_request(
+                            message_id,
+                            payload,
+                            &db,
+                            &base_dn,
+                            &authenticated_org,
+                        ).await
+                    }
+                    23 => {
+                        // Extended Request (e.g., WhoAmI, StartTLS)
+                        handle_extended_request(
+                            message_id,
+                            payload,
+                            &authenticated_user,
+                            &authenticated_org,
+                        ).await
+                    }
+                    _ => {
+                        warn!("Unsupported LDAP operation: {}", op_type);
+                        create_error_response(message_id, 1, LdapResultCode::OperationsError as u8)
+                    }
+                };
+
+                socket.write_all(&response).await
+                    .map_err(|e| crate::error::AppError::Internal(format!("Failed to write response: {}", e)))?;
+            }
+            Err(e) => {
+                error!("Failed to parse LDAP message: {}", e);
+                let error_response = create_error_response(1, 1, LdapResultCode::ProtocolError as u8);
+                socket.write_all(&error_response).await
+                    .map_err(|e| crate::error::AppError::Internal(format!("Failed to write error: {}", e)))?;
+            }
+        }
+    }
+}
+
+async fn handle_tls_connection(
+    mut socket: tokio_rustls::server::TlsStream<TcpStream>,
+    db: Arc<dyn DbService>,
+    base_dn: String,
+) -> Result<()> {
+    let mut buffer = vec![0u8; 8192];
+    let mut authenticated_user: Option<String> = None;
+    let mut authenticated_org: Option<String> = None;
+
+    loop {
+        let n = socket.read(&mut buffer).await
+            .map_err(|e| crate::error::AppError::Internal(format!("Failed to read from TLS socket: {}", e)))?;
+
+        if n == 0 {
+            debug!("Client disconnected");
+            return Ok(());
+        }
+
+        let request = &buffer[..n];
+        debug!("Received {} bytes over TLS", n);
+
+        // Parse LDAP message (simplified)
+        match parse_ldap_message(request) {
+            Ok((message_id, op_type, payload)) => {
+                debug!("Message ID: {}, Op: {:?}", message_id, op_type);
+
+                let response = match op_type {
+                    0 => {
+                        // Bind Request
+                        handle_bind_request(
+                            message_id,
+                            payload,
+                            &db,
+                            &base_dn,
+                            &mut authenticated_user,
+                            &mut authenticated_org,
+                        ).await
+                    }
+                    2 => {
+                        // Unbind Request
+                        authenticated_user = None;
+                        authenticated_org = None;
+                        debug!("User unbound");
+                        return Ok(());
+                    }
+                    3 => {
+                        // Search Request
+                        handle_search_request(
+                            message_id,
+                            payload,
+                            &db,
+                            &base_dn,
+                            &authenticated_org,
+                        ).await
+                    }
+                    23 => {
+                        // Extended Request (e.g., WhoAmI, StartTLS)
+                        handle_extended_request(
+                            message_id,
+                            payload,
+                            &authenticated_user,
+                            &authenticated_org,
+                        ).await
+                    }
+                    _ => {
+                        warn!("Unsupported LDAP operation: {}", op_type);
+                        create_error_response(message_id, 1, LdapResultCode::OperationsError as u8)
+                    }
+                };
+
+                socket.write_all(&response).await
+                    .map_err(|e| crate::error::AppError::Internal(format!("Failed to write TLS response: {}", e)))?;
+            }
+            Err(e) => {
+                error!("Failed to parse LDAP message: {}", e);
+                let error_response = create_error_response(1, 1, LdapResultCode::ProtocolError as u8);
+                socket.write_all(&error_response).await
+                    .map_err(|e| crate::error::AppError::Internal(format!("Failed to write TLS error: {}", e)))?;
+            }
+        }
+    }
+}
+
+/// Parse a DN to extract organization and username
+/// Format: cn=username,ou=organization,dc=example,dc=com
+fn parse_dn(dn: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = dn.split(',').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    
+    let mut username = None;
+    let mut organization = None;
+    
+    for part in parts {
+        let part = part.trim();
+        if part.starts_with("cn=") {
+            username = Some(part[3..].to_string());
+        } else if part.starts_with("ou=") && organization.is_none() {
+            organization = Some(part[3..].to_string());
+        }
+    }
+    
+    match (username, organization) {
+        (Some(u), Some(o)) => Some((o, u)),
+        _ => None,
+    }
+}
+
+/// Parse bind request payload to extract DN and password
+fn parse_bind_payload(payload: &[u8]) -> std::result::Result<(String, String), String> {
+    if payload.len() < 7 {
+        return Err("Bind payload too short".to_string());
+    }
+    
+    let mut pos = 0;
+    
+    // Skip bind request tag (APPLICATION 0 = 0x60)
+    if payload[pos] & 0xe0 != 0x60 {
+        return Err(format!("Invalid bind request tag: {:#x}", payload[pos]));
+    }
+    pos += 1;
+    
+    // Parse and skip bind request length
+    let len_byte = payload[pos];
+    pos += 1;
+    if len_byte & 0x80 != 0 {
+        let num_octets = (len_byte & 0x7f) as usize;
+        if pos + num_octets > payload.len() {
+            return Err("Length octets exceed payload".to_string());
+        }
+        pos += num_octets;
+    }
+    
+    // Parse version (INTEGER = 0x02)
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at version".to_string());
+    }
+    if payload[pos] != 0x02 {
+        return Err(format!("Invalid version tag: {:#x}", payload[pos]));
+    }
+    pos += 1;
+    
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at version length".to_string());
+    }
+    let version_len = payload[pos] as usize;
+    pos += 1 + version_len; // Skip version value
+    
+    // Parse DN (OCTET STRING = 0x04)
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at DN tag".to_string());
+    }
+    if payload[pos] != 0x04 {
+        return Err(format!("Invalid DN tag: {:#x}", payload[pos]));
+    }
+    pos += 1;
+    
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at DN length".to_string());
+    }
+    let dn_len = payload[pos] as usize;
+    pos += 1;
+    
+    if pos + dn_len > payload.len() {
+        return Err(format!("DN length {} exceeds remaining payload {}", dn_len, payload.len() - pos));
+    }
+    
+    let dn = if dn_len > 0 {
+        String::from_utf8_lossy(&payload[pos..pos + dn_len]).to_string()
+    } else {
+        String::new()
+    };
+    pos += dn_len;
+    
+    // Parse password (CONTEXT 0 - simple auth = 0x80)
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at password tag".to_string());
+    }
+    if payload[pos] != 0x80 {
+        return Err(format!("Invalid password tag (expected 0x80): {:#x}", payload[pos]));
+    }
+    pos += 1;
+    
+    if pos >= payload.len() {
+        return Err("Unexpected end of payload at password length".to_string());
+    }
+    let pwd_len = payload[pos] as usize;
+    pos += 1;
+    
+    if pos + pwd_len > payload.len() {
+        return Err(format!("Password length {} exceeds remaining payload {}", pwd_len, payload.len() - pos));
+    }
+    
+    let password = if pwd_len > 0 {
+        String::from_utf8_lossy(&payload[pos..pos + pwd_len]).to_string()
+    } else {
+        String::new()
+    };
+    
+    Ok((dn, password))
+}
+
+fn parse_ldap_message(data: &[u8]) -> std::result::Result<(u32, u8, &[u8]), String> {
+    // Simplified BER/DER parser for LDAP messages
+    // In production, use a proper ASN.1/BER library
+    
+    if data.len() < 5 {
+        return Err("Message too short".to_string());
+    }
+
+    // Skip SEQUENCE tag and length
+    let mut pos = 0;
+    if data[pos] != 0x30 {
+        return Err("Invalid SEQUENCE tag".to_string());
+    }
+    pos += 1;
+    
+    // Parse length
+    let len_byte = data[pos];
+    pos += 1;
+    if len_byte & 0x80 != 0 {
+        let num_octets = (len_byte & 0x7f) as usize;
+        pos += num_octets;
+    }
+
+    // Parse message ID (INTEGER)
+    if data[pos] != 0x02 {
+        return Err("Invalid message ID tag".to_string());
+    }
+    pos += 1;
+    let id_len = data[pos] as usize;
+    pos += 1;
+    
+    let mut message_id = 0u32;
+    for i in 0..id_len {
+        message_id = (message_id << 8) | data[pos + i] as u32;
+    }
+    pos += id_len;
+
+    // Parse operation type (APPLICATION tag)
+    let op_type = data[pos] & 0x1f;
+    
+    // Return message ID, operation type, and remaining payload
+    Ok((message_id, op_type, &data[pos..]))
+}
+
+async fn handle_bind_request(
+    message_id: u32,
+    payload: &[u8],
+    db: &Arc<dyn DbService>,
+    _base_dn: &str,
+    authenticated_user: &mut Option<String>,
+    authenticated_org: &mut Option<String>,
+) -> Vec<u8> {
+    debug!("Processing bind request");
+    
+    // Parse DN and password from payload
+    let (dn, password) = match parse_bind_payload(payload) {
+        Ok(creds) => creds,
+        Err(e) => {
+            warn!("Failed to parse bind payload: {}", e);
+            return create_bind_response(message_id, LdapResultCode::ProtocolError as u8);
+        }
+    };
+    
+    debug!("Bind request for DN: {}", dn);
+    
+    // Handle anonymous bind (empty DN and password)
+    if dn.is_empty() && password.is_empty() {
+        debug!("Anonymous bind accepted");
+        *authenticated_user = None;
+        *authenticated_org = None;
+        return create_bind_response(message_id, LdapResultCode::Success as u8);
+    }
+    
+    // Parse DN to extract organization and username
+    let (org, username) = match parse_dn(&dn) {
+        Some(parsed) => parsed,
+        None => {
+            warn!("Invalid DN format: {}", dn);
+            return create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8);
+        }
+    };
+    
+    // Verify credentials with database
+    match db.verify_user_password(&org, &username, &password).await {
+        Ok(true) => {
+            info!("User {}/{} authenticated successfully", org, username);
+            *authenticated_user = Some(username);
+            *authenticated_org = Some(org);
+            create_bind_response(message_id, LdapResultCode::Success as u8)
+        }
+        Ok(false) => {
+            warn!("Invalid credentials for {}/{}", org, username);
+            *authenticated_user = None;
+            *authenticated_org = None;
+            create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8)
+        }
+        Err(e) => {
+            error!("Error verifying credentials: {}", e);
+            *authenticated_user = None;
+            *authenticated_org = None;
+            create_bind_response(message_id, LdapResultCode::OperationsError as u8)
+        }
+    }
+}
+
+async fn handle_search_request(
+    message_id: u32,
+    _payload: &[u8],
+    db: &Arc<dyn DbService>,
+    base_dn: &str,
+    authenticated_org: &Option<String>,
+) -> Vec<u8> {
+    debug!("Processing search request");
+    
+    // Check if user is authenticated
+    let org = match authenticated_org {
+        Some(o) => o,
+        None => {
+            warn!("Search attempted without authentication");
+            return create_error_response(message_id, 5, LdapResultCode::InsufficientAccessRights as u8);
+        }
+    };
+    
+    // In a full implementation, we would parse the search filter, base DN, scope, etc.
+    // For now, we'll return all users in the organization as a simple search result
+    
+    let mut responses = Vec::new();
+    
+    // Try to get users from the organization
+    match db.list_users(org).await {
+        Ok(users) => {
+            for user in users {
+                let dn = format!("cn={},ou={},{}", user.username, org, base_dn);
+                let entry_response = create_search_entry_response(message_id, &dn, &user.username, user.email.as_deref());
+                responses.extend_from_slice(&entry_response);
+            }
+        }
+        Err(e) => {
+            warn!("Error searching users: {}", e);
+        }
+    }
+    
+    // Send search result done
+    let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
+    responses.extend_from_slice(&done_response);
+    
+    responses
+}
+
+async fn handle_extended_request(
+    message_id: u32,
+    _payload: &[u8],
+    authenticated_user: &Option<String>,
+    authenticated_org: &Option<String>,
+) -> Vec<u8> {
+    debug!("Processing extended request");
+    
+    // Check if it's a WhoAmI request (OID: 1.3.6.1.4.1.4203.1.11.3)
+    // Simplified: just return the authenticated user info
+    
+    if let (Some(user), Some(org)) = (authenticated_user, authenticated_org) {
+        let dn = format!("cn={},ou={}", user, org);
+        create_whoami_response(message_id, &dn)
+    } else {
+        create_error_response(message_id, 24, LdapResultCode::InsufficientAccessRights as u8)
+    }
+}
+
+fn create_bind_response(message_id: u32, result_code: u8) -> Vec<u8> {
+    // Simplified LDAP Bind Response
+    // Real implementation should use proper BER encoding
+    
+    let mut response = Vec::new();
+    
+    // SEQUENCE
+    response.push(0x30);
+    response.push(0x0c); // length placeholder
+    
+    // Message ID
+    response.push(0x02);
+    response.push(0x01);
+    response.push(message_id as u8);
+    
+    // Bind Response
+    response.push(0x61); // APPLICATION 1
+    response.push(0x07);
+    
+    // Result code
+    response.push(0x0a); // ENUMERATED
+    response.push(0x01);
+    response.push(result_code);
+    
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    response
+}
+
+fn create_search_entry_response(message_id: u32, dn: &str, cn: &str, mail: Option<&str>) -> Vec<u8> {
+    let mut response = Vec::new();
+    
+    // Build attributes
+    let mut attrs = Vec::new();
+    
+    // cn attribute
+    let cn_bytes = cn.as_bytes();
+    let mut cn_attr = Vec::new();
+    cn_attr.push(0x30); // SEQUENCE
+    cn_attr.push((4 + cn_bytes.len()) as u8);
+    cn_attr.push(0x04); // OCTET STRING
+    cn_attr.push(0x02); // length of "cn"
+    cn_attr.extend_from_slice(b"cn");
+    cn_attr.push(0x31); // SET
+    cn_attr.push((cn_bytes.len() + 2) as u8);
+    cn_attr.push(0x04); // OCTET STRING
+    cn_attr.push(cn_bytes.len() as u8);
+    cn_attr.extend_from_slice(cn_bytes);
+    attrs.extend_from_slice(&cn_attr);
+    
+    // mail attribute (if present)
+    if let Some(email) = mail {
+        let mail_bytes = email.as_bytes();
+        let mut mail_attr = Vec::new();
+        mail_attr.push(0x30); // SEQUENCE
+        mail_attr.push((6 + mail_bytes.len()) as u8);
+        mail_attr.push(0x04); // OCTET STRING
+        mail_attr.push(0x04); // length of "mail"
+        mail_attr.extend_from_slice(b"mail");
+        mail_attr.push(0x31); // SET
+        mail_attr.push((mail_bytes.len() + 2) as u8);
+        mail_attr.push(0x04); // OCTET STRING
+        mail_attr.push(mail_bytes.len() as u8);
+        mail_attr.extend_from_slice(mail_bytes);
+        attrs.extend_from_slice(&mail_attr);
+    }
+    
+    let dn_bytes = dn.as_bytes();
+    let total_len = 7 + dn_bytes.len() + attrs.len();
+    
+    // SEQUENCE
+    response.push(0x30);
+    if total_len < 128 {
+        response.push(total_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(total_len as u8);
+    }
+    
+    // Message ID
+    response.push(0x02);
+    response.push(0x01);
+    response.push(message_id as u8);
+    
+    // Search Result Entry
+    response.push(0x64); // APPLICATION 4
+    let entry_len = dn_bytes.len() + attrs.len() + 4;
+    if entry_len < 128 {
+        response.push(entry_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(entry_len as u8);
+    }
+    
+    // DN
+    response.push(0x04);
+    response.push(dn_bytes.len() as u8);
+    response.extend_from_slice(dn_bytes);
+    
+    // Attributes
+    response.push(0x30); // SEQUENCE
+    if attrs.len() < 128 {
+        response.push(attrs.len() as u8);
+    } else {
+        response.push(0x81);
+        response.push(attrs.len() as u8);
+    }
+    response.extend_from_slice(&attrs);
+    
+    response
+}
+
+fn create_search_done_response(message_id: u32, result_code: u8) -> Vec<u8> {
+    let mut response = Vec::new();
+    
+    // SEQUENCE
+    response.push(0x30);
+    response.push(0x0c);
+    
+    // Message ID
+    response.push(0x02);
+    response.push(0x01);
+    response.push(message_id as u8);
+    
+    // Search Result Done
+    response.push(0x65); // APPLICATION 5
+    response.push(0x07);
+    
+    // Result code
+    response.push(0x0a);
+    response.push(0x01);
+    response.push(result_code);
+    
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    response
+}
+
+fn create_whoami_response(message_id: u32, dn: &str) -> Vec<u8> {
+    let mut response = Vec::new();
+    let dn_bytes = format!("dn:{}", dn).into_bytes();
+    
+    // SEQUENCE
+    response.push(0x30);
+    response.push((11 + dn_bytes.len()) as u8);
+    
+    // Message ID
+    response.push(0x02);
+    response.push(0x01);
+    response.push(message_id as u8);
+    
+    // Extended Response
+    response.push(0x78); // APPLICATION 24
+    response.push((dn_bytes.len() + 5) as u8);
+    
+    // Result code
+    response.push(0x0a);
+    response.push(0x01);
+    response.push(LdapResultCode::Success as u8);
+    
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    // Response value
+    response.push(0x8b); // CONTEXT 11
+    response.push(dn_bytes.len() as u8);
+    response.extend_from_slice(&dn_bytes);
+    
+    response
+}
+
+fn create_error_response(message_id: u32, op_type: u8, result_code: u8) -> Vec<u8> {
+    let mut response = Vec::new();
+    
+    // SEQUENCE
+    response.push(0x30);
+    response.push(0x0c);
+    
+    // Message ID
+    response.push(0x02);
+    response.push(0x01);
+    response.push(message_id as u8);
+    
+    // Response with op_type
+    response.push(0x60 | op_type);
+    response.push(0x07);
+    
+    // Result code
+    response.push(0x0a);
+    response.push(0x01);
+    response.push(result_code);
+    
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
+    
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::mock::MockDbService;
+    use crate::models::{User, Group};
+    use chrono::Utc;
+
+    #[test]
+    fn test_parse_ldap_message() {
+        // Simple test message: SEQUENCE { messageID: 1, bindRequest: ... }
+        let message = vec![
+            0x30, 0x0c, // SEQUENCE, length 12
+            0x02, 0x01, 0x01, // INTEGER 1 (message ID)
+            0x60, 0x07, // APPLICATION 0 (bind request), length 7
+            0x02, 0x01, 0x03, // version 3
+            0x04, 0x00, // empty DN
+            0x80, 0x00, // empty password
+        ];
+
+        let result = parse_ldap_message(&message);
+        assert!(result.is_ok());
+        
+        let (message_id, op_type, _) = result.unwrap();
+        assert_eq!(message_id, 1);
+        assert_eq!(op_type, 0); // bind request
+    }
+
+    #[test]
+    fn test_parse_ldap_message_invalid() {
+        let short_message = vec![0x30, 0x01];
+        assert!(parse_ldap_message(&short_message).is_err());
+        
+        let invalid_tag = vec![0x31, 0x0c, 0x02, 0x01, 0x01];
+        assert!(parse_ldap_message(&invalid_tag).is_err());
+    }
+
+    #[test]
+    fn test_parse_dn_valid() {
+        let dn = "cn=john,ou=acme,dc=example,dc=com";
+        let result = parse_dn(dn);
+        assert!(result.is_some());
+        
+        let (org, username) = result.unwrap();
+        assert_eq!(org, "acme");
+        assert_eq!(username, "john");
+    }
+
+    #[test]
+    fn test_parse_dn_invalid() {
+        // Missing organization
+        assert!(parse_dn("cn=john,dc=example,dc=com").is_none());
+        
+        // Missing username
+        assert!(parse_dn("ou=acme,dc=example,dc=com").is_none());
+        
+        // Too short
+        assert!(parse_dn("cn=john").is_none());
+        
+        // Empty
+        assert!(parse_dn("").is_none());
+    }
+
+    #[test]
+    fn test_parse_bind_payload() {
+        // Valid bind request payload
+        // "cn=john,ou=acme" = 15 characters
+        let payload = vec![
+            0x60, 0x1c, // APPLICATION 0, length 28
+            0x02, 0x01, 0x03, // version 3
+            0x04, 0x0f, // DN length 15
+            b'c', b'n', b'=', b'j', b'o', b'h', b'n', b',',
+            b'o', b'u', b'=', b'a', b'c', b'm', b'e',
+            0x80, 0x08, // password length 8
+            b'p', b'a', b's', b's', b'w', b'o', b'r', b'd',
+        ];
+
+        let result = parse_bind_payload(&payload);
+        if let Err(ref e) = result {
+            eprintln!("Parse error: {}", e);
+        }
+        assert!(result.is_ok());
+        
+        let (dn, password) = result.unwrap();
+        assert_eq!(dn, "cn=john,ou=acme");
+        assert_eq!(password, "password");
+    }
+
+    #[test]
+    fn test_parse_bind_payload_anonymous() {
+        // Anonymous bind (empty DN and password)
+        let payload = vec![
+            0x60, 0x07, // APPLICATION 0
+            0x02, 0x01, 0x03, // version 3
+            0x04, 0x00, // empty DN
+            0x80, 0x00, // empty password
+        ];
+
+        let result = parse_bind_payload(&payload);
+        assert!(result.is_ok());
+        
+        let (dn, password) = result.unwrap();
+        assert_eq!(dn, "");
+        assert_eq!(password, "");
+    }
+
+    #[test]
+    fn test_parse_bind_payload_invalid() {
+        // Too short
+        let short = vec![0x60, 0x01];
+        assert!(parse_bind_payload(&short).is_err());
+        
+        // Invalid version tag
+        let invalid = vec![0x60, 0x07, 0x03, 0x01, 0x03, 0x04, 0x00, 0x80, 0x00];
+        assert!(parse_bind_payload(&invalid).is_err());
+    }
+
+    #[test]
+    fn test_create_bind_response() {
+        let response = create_bind_response(1, LdapResultCode::Success as u8);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        assert_eq!(response[2], 0x02); // INTEGER tag
+        assert_eq!(response[4], 1); // message ID
+        assert_eq!(response[5], 0x61); // Bind Response tag
+    }
+
+    #[test]
+    fn test_create_bind_response_invalid_credentials() {
+        let response = create_bind_response(2, LdapResultCode::InvalidCredentials as u8);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        assert_eq!(response[4], 2); // message ID
+        // Result code should be 49 (invalid credentials)
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 49);
+    }
+
+    #[test]
+    fn test_create_search_done_response() {
+        let response = create_search_done_response(3, LdapResultCode::Success as u8);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        assert_eq!(response[4], 3); // message ID
+        assert_eq!(response[5], 0x65); // Search Result Done tag
+    }
+
+    #[test]
+    fn test_create_whoami_response() {
+        let dn = "cn=john,ou=acme";
+        let response = create_whoami_response(4, dn);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        assert_eq!(response[4], 4); // message ID
+        assert_eq!(response[5], 0x78); // Extended Response tag
+    }
+
+    #[test]
+    fn test_create_error_response() {
+        let response = create_error_response(5, 1, LdapResultCode::ProtocolError as u8);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        assert_eq!(response[4], 5); // message ID
+        // Result code should be 2 (protocol error)
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 2);
+    }
+
+    #[test]
+    fn test_create_search_entry_response() {
+        let dn = "cn=john,ou=acme,dc=example,dc=com";
+        let cn = "john";
+        let mail = Some("john@acme.com");
+        
+        let response = create_search_entry_response(1, dn, cn, mail);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+        
+        // Check that the DN is included
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("john"));
+    }
+
+    #[test]
+    fn test_create_search_entry_response_no_email() {
+        let dn = "cn=jane,ou=acme,dc=example,dc=com";
+        let cn = "jane";
+        
+        let response = create_search_entry_response(1, dn, cn, None);
+        assert!(!response.is_empty());
+        assert_eq!(response[0], 0x30); // SEQUENCE
+    }
+
+    #[tokio::test]
+    async fn test_handle_bind_request_success() {
+        let mut mock_db = MockDbService::new();
+        mock_db
+            .expect_verify_user_password()
+            .with(
+                mockall::predicate::eq("acme"),
+                mockall::predicate::eq("john"),
+                mockall::predicate::eq("password123"),
+            )
+            .times(1)
+            .returning(|_, _, _| Ok(true));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let mut auth_user = None;
+        let mut auth_org = None;
+
+        // Create bind request payload
+        // DN: "cn=john,ou=acme,dc=example,dc=com" = 33 bytes
+        // Password: "password123" = 11 bytes
+        // Total: 2 (APPLICATION tag + length) + 3 (version) + 2 (DN tag + length) + 33 (DN) + 2 (password tag + length) + 11 (password) = 53 bytes
+        // So APPLICATION length is 51 (53 - 2)
+        let payload = vec![
+            0x60, 0x33, // APPLICATION 0, length 51
+            0x02, 0x01, 0x03, // version 3
+            0x04, 0x21, // DN OCTET STRING, length 33
+            b'c', b'n', b'=', b'j', b'o', b'h', b'n', b',',
+            b'o', b'u', b'=', b'a', b'c', b'm', b'e', b',',
+            b'd', b'c', b'=', b'e', b'x', b'a', b'm', b'p', b'l', b'e', b',',
+            b'd', b'c', b'=', b'c', b'o', b'm',
+            0x80, 0x0b, // password (context-specific [0]), length 11
+            b'p', b'a', b's', b's', b'w', b'o', b'r', b'd', b'1', b'2', b'3',
+        ];
+
+        let response = handle_bind_request(1, &payload, &db, base_dn, &mut auth_user, &mut auth_org).await;
+        
+        assert!(!response.is_empty());
+        assert_eq!(auth_user, Some("john".to_string()));
+        assert_eq!(auth_org, Some("acme".to_string()));
+        
+        // Check for success result code (0)
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_bind_request_invalid_credentials() {
+        let mut mock_db = MockDbService::new();
+        mock_db
+            .expect_verify_user_password()
+            .with(
+                mockall::predicate::eq("acme"),
+                mockall::predicate::eq("john"),
+                mockall::predicate::eq("wrongpass"),
+            )
+            .times(1)
+            .returning(|_, _, _| Ok(false));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let mut auth_user = None;
+        let mut auth_org = None;
+
+        // DN: "cn=john,ou=acme,dc=example,dc=com" = 33 bytes
+        // Password: "wrongpass" = 9 bytes
+        // Total: 2 + 3 + 2 + 33 + 2 + 9 = 51, so APPLICATION length is 49
+        let payload = vec![
+            0x60, 0x31, // APPLICATION 0, length 49
+            0x02, 0x01, 0x03, // version 3
+            0x04, 0x21, // DN OCTET STRING, length 33
+            b'c', b'n', b'=', b'j', b'o', b'h', b'n', b',',
+            b'o', b'u', b'=', b'a', b'c', b'm', b'e', b',',
+            b'd', b'c', b'=', b'e', b'x', b'a', b'm', b'p', b'l', b'e', b',',
+            b'd', b'c', b'=', b'c', b'o', b'm',
+            0x80, 0x09, // password (context-specific [0]), length 9
+            b'w', b'r', b'o', b'n', b'g', b'p', b'a', b's', b's',
+        ];
+
+        let response = handle_bind_request(1, &payload, &db, base_dn, &mut auth_user, &mut auth_org).await;
+        
+        assert!(!response.is_empty());
+        assert_eq!(auth_user, None);
+        assert_eq!(auth_org, None);
+        
+        // Check for invalid credentials result code (49)
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 49);
+    }
+
+    #[tokio::test]
+    async fn test_handle_bind_request_anonymous() {
+        let mock_db = MockDbService::new();
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let mut auth_user = Some("previous".to_string());
+        let mut auth_org = Some("previous".to_string());
+
+        // Anonymous bind payload
+        let payload = vec![
+            0x60, 0x07,
+            0x02, 0x01, 0x03,
+            0x04, 0x00,
+            0x80, 0x00,
+        ];
+
+        let response = handle_bind_request(1, &payload, &db, base_dn, &mut auth_user, &mut auth_org).await;
+        
+        assert!(!response.is_empty());
+        assert_eq!(auth_user, None);
+        assert_eq!(auth_org, None);
+        
+        // Check for success result code
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request() {
+        let mut mock_db = MockDbService::new();
+        
+        let now = Utc::now();
+        let test_users = vec![
+            User {
+                organization: "acme".to_string(),
+                username: "john".to_string(),
+                password_hash: "hash".to_string(),
+                email: Some("john@acme.com".to_string()),
+                full_name: Some("John Doe".to_string()),
+                created_at: now,
+                updated_at: now,
+            },
+            User {
+                organization: "acme".to_string(),
+                username: "jane".to_string(),
+                password_hash: "hash".to_string(),
+                email: Some("jane@acme.com".to_string()),
+                full_name: Some("Jane Doe".to_string()),
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        mock_db
+            .expect_list_users()
+            .with(mockall::predicate::eq("acme"))
+            .times(1)
+            .returning(move |_| Ok(test_users.clone()));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = Some("acme".to_string());
+
+        let payload = vec![]; // Simplified - normally would contain search params
+
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org).await;
+        
+        assert!(!response.is_empty());
+        
+        // Response should contain search entries and a search done message
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("john") || response.len() > 100);
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_unauthenticated() {
+        let mock_db = MockDbService::new();
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = None;
+
+        let payload = vec![];
+
+        let response = handle_search_request(1, &payload, &db, base_dn, &auth_org).await;
+        
+        assert!(!response.is_empty());
+        // Should return error response for insufficient access rights
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+    }
+
+    #[tokio::test]
+    async fn test_handle_extended_request_whoami() {
+        let auth_user = Some("john".to_string());
+        let auth_org = Some("acme".to_string());
+
+        let payload = vec![]; // Simplified
+
+        let response = handle_extended_request(1, &payload, &auth_user, &auth_org).await;
+        
+        assert!(!response.is_empty());
+        assert_eq!(response[5], 0x78); // Extended Response tag
+        
+        // Should contain the DN
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("dn:"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_extended_request_unauthenticated() {
+        let auth_user = None;
+        let auth_org = None;
+
+        let payload = vec![];
+
+        let response = handle_extended_request(1, &payload, &auth_user, &auth_org).await;
+        
+        assert!(!response.is_empty());
+        // Should return insufficient access rights
+        let result_code_pos = 9;
+        assert_eq!(response[result_code_pos], 50);
+    }
+}

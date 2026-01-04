@@ -1,0 +1,80 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ldap-auth-netpol
+  labels:
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: application
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 3389
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-netpol
+  labels:
+    app.kubernetes.io/component: security
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/component: application
+    ports:
+    - protocol: TCP
+      port: 6379
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
