@@ -2,9 +2,9 @@
 
 A production-ready, lightweight Rust-based LDAP authentication service with REST API and Redis backend.
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-56%2F56-brightgreen)]()
-[![Production Ready](https://img.shields.io/badge/production-ready-blue)]()
+[![CI/CD Pipeline](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/ci-cd.yml)
+[![Tests](https://img.shields.io/badge/tests-47%20passing-brightgreen)](https://github.com/FalkorDB/ldap-auth-rs/actions)
+[![Production Ready](https://img.shields.io/badge/production-ready-blue)](docs/DEPLOYMENT.md)
 
 ## Features
 
@@ -27,7 +27,7 @@ A production-ready, lightweight Rust-based LDAP authentication service with REST
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ldap-auth-rs.git
+git clone https://github.com/falkordb/ldap-auth-rs.git
 cd ldap-auth-rs
 
 # Start all services
@@ -232,13 +232,12 @@ ldap-auth-rs/
 
 ## Testing
 
-**Test Coverage: 56/56 tests passing** ✅
+**Test Coverage: 47 tests passing** ✅
 
-- 33 unit tests (lib + main)
-- 6 authentication tests
+- 35 unit tests (lib + main)
+- 6 authentication integration tests
 - 3 API integration tests
-- 11 LDAP tests (including TLS)
-- 3 Prometheus metrics tests
+- 3 metrics tests
 
 ```bash
 # Run all tests
@@ -308,8 +307,8 @@ Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 ## Support
 
 - 📖 Documentation: [docs/](docs/)
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/ldap-auth-rs/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/ldap-auth-rs/discussions)
+- 🐛 Issues: [GitHub Issues](https://github.com/falkordb/ldap-auth-rs/issues)
+- 💬 Discussions: [GitHub Discussions](https://github.com/falkordb/ldap-auth-rs/discussions)
 
 ## Status
 
@@ -322,6 +321,3 @@ All production hardening completed:
 - Comprehensive error handling
 - Full observability (logs + metrics)
 - Performance optimizations applied
-- 56/56 tests passing
-
-See [PRODUCTION_HARDENING.md](PRODUCTION_HARDENING.md) for complete checklist.

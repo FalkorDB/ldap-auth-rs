@@ -11,7 +11,7 @@ Thank you for your interest in contributing! This document provides guidelines f
 
 2. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/ldap-auth-rs.git
+   git clone https://github.com/falkordb/ldap-auth-rs.git
    cd ldap-auth-rs
    ```
 
