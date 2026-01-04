@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 /// Global Prometheus metrics layer and handle
 /// Initialized once on first use to avoid registry conflicts in tests
 static METRICS: Lazy<(PrometheusMetricLayer<'static>, PrometheusHandle)> =
-    Lazy::new(|| PrometheusMetricLayer::pair());
+    Lazy::new(PrometheusMetricLayer::pair);
 
 /// Get the global Prometheus metrics layer and handle
 /// This ensures only one registry is created, allowing tests to run without conflicts

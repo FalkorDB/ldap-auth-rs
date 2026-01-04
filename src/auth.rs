@@ -84,10 +84,6 @@ impl IntoResponse for AuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::{header, Request as HttpRequest},
-    };
 
     // Note: These tests verify the error conditions
     // Full integration tests are in tests/auth_integration_test.rs

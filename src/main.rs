@@ -13,7 +13,6 @@ mod tls;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{info, Level};
-use tracing_subscriber;
 
 use config::Config;
 use redis_db::RedisDbService;

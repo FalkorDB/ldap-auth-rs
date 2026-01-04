@@ -55,7 +55,6 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
 /// Generate self-signed certificates for testing
 #[allow(dead_code)]
 pub fn generate_test_certs() -> Result<(String, String)> {
-    use std::io::Write;
     use std::process::Command;
 
     let temp_dir = std::env::temp_dir();
@@ -81,7 +80,7 @@ pub fn generate_test_certs() -> Result<(String, String)> {
         .ok_or_else(|| AppError::Internal("Invalid UTF-8 in cert path".to_string()))?;
 
     let output = Command::new("openssl")
-        .args(&[
+        .args([
             "req",
             "-x509",
             "-newkey",

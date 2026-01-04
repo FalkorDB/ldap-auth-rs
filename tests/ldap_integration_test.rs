@@ -1,5 +1,5 @@
 use ldap_auth_rs::{
-    config::Config, db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService,
+    db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService,
     tls,
 };
 use rustls::{ClientConfig, RootCertStore, ServerName};
@@ -24,7 +24,7 @@ async fn setup_test_db() -> Arc<dyn DbService> {
 async fn start_ldap_server(db: Arc<dyn DbService>, port: u16) {
     let addr = format!("127.0.0.1:{}", port);
     let base_dn = "dc=example,dc=com".to_string();
-    let server = LdapServer::new(db, base_dn);
+    let server = LdapServer::new(db, base_dn, None);
 
     tokio::spawn(async move {
         if let Err(e) = server.run(&addr).await {
@@ -42,7 +42,7 @@ async fn start_ldap_server_with_tls(
 ) -> Result<(String, String), String> {
     let addr = format!("127.0.0.1:{}", port);
     let base_dn = "dc=example,dc=com".to_string();
-    let server = LdapServer::new(db, base_dn);
+    let server = LdapServer::new(db, base_dn, None);
 
     // Generate test certificates
     let (cert_path, key_path) =
@@ -406,7 +406,7 @@ async fn test_ldap_search_authenticated() {
 
     // Should contain search result done (0x65)
     assert!(
-        search_response.iter().any(|&b| b == 0x65),
+        search_response.contains(&0x65),
         "Should contain search result done"
     );
 
@@ -504,7 +504,7 @@ async fn test_ldap_whoami() {
 
     // Should contain extended response tag (0x78)
     assert!(
-        whoami_response.iter().any(|&b| b == 0x78),
+        whoami_response.contains(&0x78),
         "Should contain extended response"
     );
 
@@ -814,7 +814,7 @@ async fn test_ldap_search_authenticated_tls() {
 
     // Should contain search result done (0x65)
     assert!(
-        search_response.iter().any(|&b| b == 0x65),
+        search_response.contains(&0x65),
         "Should contain search result done"
     );
 

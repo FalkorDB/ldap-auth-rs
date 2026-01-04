@@ -1,8 +1,6 @@
 use ldap_auth_rs::{
     api,
-    config::Config,
     db::DbService,
-    models::{GroupCreate, UserCreate},
     redis_db::RedisDbService,
 };
 use reqwest::Client;
@@ -54,7 +52,7 @@ async fn test_api_user_crud() {
     });
 
     let response = client
-        .post(&format!("{}/api/users", base_url))
+        .post(format!("{}/api/users", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .json(&user_create)
         .send()
@@ -65,7 +63,7 @@ async fn test_api_user_crud() {
 
     // Get user
     let response = client
-        .get(&format!("{}/api/users/test-org/testuser", base_url))
+        .get(format!("{}/api/users/test-org/testuser", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
@@ -79,7 +77,7 @@ async fn test_api_user_crud() {
     });
 
     let response = client
-        .put(&format!("{}/api/users/test-org/testuser", base_url))
+        .put(format!("{}/api/users/test-org/testuser", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .json(&user_update)
         .send()
@@ -90,7 +88,7 @@ async fn test_api_user_crud() {
 
     // Delete user
     let response = client
-        .delete(&format!("{}/api/users/test-org/testuser", base_url))
+        .delete(format!("{}/api/users/test-org/testuser", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
@@ -129,7 +127,7 @@ async fn test_api_group_crud() {
     });
 
     client
-        .post(&format!("{}/api/users", base_url))
+        .post(format!("{}/api/users", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .json(&user_create)
         .send()
@@ -144,7 +142,7 @@ async fn test_api_group_crud() {
     });
 
     let response = client
-        .post(&format!("{}/api/groups", base_url))
+        .post(format!("{}/api/groups", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .json(&group_create)
         .send()
@@ -159,7 +157,7 @@ async fn test_api_group_crud() {
     });
 
     let response = client
-        .post(&format!(
+        .post(format!(
             "{}/api/groups/test-org/testgroup/members",
             base_url
         ))
@@ -173,7 +171,7 @@ async fn test_api_group_crud() {
 
     // Get group
     let response = client
-        .get(&format!("{}/api/groups/test-org/testgroup", base_url))
+        .get(format!("{}/api/groups/test-org/testgroup", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
@@ -183,7 +181,7 @@ async fn test_api_group_crud() {
 
     // Remove member from group
     let response = client
-        .delete(&format!(
+        .delete(format!(
             "{}/api/groups/test-org/testgroup/members/groupuser",
             base_url
         ))
@@ -196,7 +194,7 @@ async fn test_api_group_crud() {
 
     // Delete group
     let response = client
-        .delete(&format!("{}/api/groups/test-org/testgroup", base_url))
+        .delete(format!("{}/api/groups/test-org/testgroup", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
@@ -206,7 +204,7 @@ async fn test_api_group_crud() {
 
     // Cleanup user
     client
-        .delete(&format!("{}/api/users/test-org/groupuser", base_url))
+        .delete(format!("{}/api/users/test-org/groupuser", base_url))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
@@ -231,7 +229,7 @@ async fn test_health_check() {
     let base_url = format!("http://{}", addr);
 
     let response = client
-        .get(&format!("{}/health", base_url))
+        .get(format!("{}/health", base_url))
         .send()
         .await
         .expect("Failed to check health");

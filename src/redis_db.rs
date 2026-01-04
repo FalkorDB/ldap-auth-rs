@@ -401,8 +401,8 @@ impl DbService for RedisDbService {
             .into_iter()
             .filter(|u| {
                 u.username.contains(filter)
-                    || u.email.as_ref().map_or(false, |e| e.contains(filter))
-                    || u.full_name.as_ref().map_or(false, |n| n.contains(filter))
+                    || u.email.as_ref().is_some_and(|e| e.contains(filter))
+                    || u.full_name.as_ref().is_some_and(|n| n.contains(filter))
             })
             .collect();
 
@@ -417,7 +417,7 @@ impl DbService for RedisDbService {
             .into_iter()
             .filter(|g| {
                 g.name.contains(filter)
-                    || g.description.as_ref().map_or(false, |d| d.contains(filter))
+                    || g.description.as_ref().is_some_and(|d| d.contains(filter))
             })
             .collect();
 

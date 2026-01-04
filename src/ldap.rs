@@ -330,10 +330,12 @@ fn parse_dn(dn: &str) -> Option<(String, String)> {
 
     for part in parts {
         let part = part.trim();
-        if part.starts_with("cn=") {
-            username = Some(part[3..].to_string());
-        } else if part.starts_with("ou=") && organization.is_none() {
-            organization = Some(part[3..].to_string());
+        if let Some(stripped) = part.strip_prefix("cn=") {
+            username = Some(stripped.to_string());
+        } else if let Some(stripped) = part.strip_prefix("ou=") {
+            if organization.is_none() {
+                organization = Some(stripped.to_string());
+            }
         }
     }
 
@@ -649,33 +651,28 @@ fn create_bind_response(message_id: u32, result_code: u8) -> Vec<u8> {
     // Simplified LDAP Bind Response
     // Real implementation should use proper BER encoding
 
-    let mut response = Vec::new();
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(0x0c); // length placeholder
-
-    // Message ID
-    response.push(0x02);
-    response.push(0x01);
-    response.push(message_id as u8);
-
-    // Bind Response
-    response.push(0x61); // APPLICATION 1
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a); // ENUMERATED
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
+    let response = vec![
+        // SEQUENCE
+        0x30,
+        0x0c, // length placeholder
+        // Message ID
+        0x02,
+        0x01,
+        message_id as u8,
+        // Bind Response
+        0x61, // APPLICATION 1
+        0x07,
+        // Result code
+        0x0a, // ENUMERATED
+        0x01,
+        result_code,
+        // Matched DN (empty)
+        0x04,
+        0x00,
+        // Diagnostic message (empty)
+        0x04,
+        0x00,
+    ];
 
     response
 }
@@ -693,11 +690,12 @@ fn create_search_entry_response(
 
     // cn attribute
     let cn_bytes = cn.as_bytes();
-    let mut cn_attr = Vec::new();
-    cn_attr.push(0x30); // SEQUENCE
-    cn_attr.push((4 + cn_bytes.len()) as u8);
-    cn_attr.push(0x04); // OCTET STRING
-    cn_attr.push(0x02); // length of "cn"
+    let mut cn_attr = vec![
+        0x30, // SEQUENCE
+        (4 + cn_bytes.len()) as u8,
+        0x04, // OCTET STRING
+        0x02, // length of "cn"
+    ];
     cn_attr.extend_from_slice(b"cn");
     cn_attr.push(0x31); // SET
     cn_attr.push((cn_bytes.len() + 2) as u8);
@@ -709,11 +707,12 @@ fn create_search_entry_response(
     // mail attribute (if present)
     if let Some(email) = mail {
         let mail_bytes = email.as_bytes();
-        let mut mail_attr = Vec::new();
-        mail_attr.push(0x30); // SEQUENCE
-        mail_attr.push((6 + mail_bytes.len()) as u8);
-        mail_attr.push(0x04); // OCTET STRING
-        mail_attr.push(0x04); // length of "mail"
+        let mut mail_attr = vec![
+            0x30, // SEQUENCE
+            (6 + mail_bytes.len()) as u8,
+            0x04, // OCTET STRING
+            0x04, // length of "mail"
+        ];
         mail_attr.extend_from_slice(b"mail");
         mail_attr.push(0x31); // SET
         mail_attr.push((mail_bytes.len() + 2) as u8);
@@ -769,33 +768,28 @@ fn create_search_entry_response(
 }
 
 fn create_search_done_response(message_id: u32, result_code: u8) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(0x0c);
-
-    // Message ID
-    response.push(0x02);
-    response.push(0x01);
-    response.push(message_id as u8);
-
-    // Search Result Done
-    response.push(0x65); // APPLICATION 5
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a);
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
+    let response = vec![
+        // SEQUENCE
+        0x30,
+        0x0c,
+        // Message ID
+        0x02,
+        0x01,
+        message_id as u8,
+        // Search Result Done
+        0x65, // APPLICATION 5
+        0x07,
+        // Result code
+        0x0a,
+        0x01,
+        result_code,
+        // Matched DN (empty)
+        0x04,
+        0x00,
+        // Diagnostic message (empty)
+        0x04,
+        0x00,
+    ];
 
     response
 }
@@ -839,33 +833,28 @@ fn create_whoami_response(message_id: u32, dn: &str) -> Vec<u8> {
 }
 
 fn create_error_response(message_id: u32, op_type: u8, result_code: u8) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(0x0c);
-
-    // Message ID
-    response.push(0x02);
-    response.push(0x01);
-    response.push(message_id as u8);
-
-    // Response with op_type
-    response.push(0x60 | op_type);
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a);
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
+    let response = vec![
+        // SEQUENCE
+        0x30,
+        0x0c,
+        // Message ID
+        0x02,
+        0x01,
+        message_id as u8,
+        // Response with op_type
+        0x60 | op_type,
+        0x07,
+        // Result code
+        0x0a,
+        0x01,
+        result_code,
+        // Matched DN (empty)
+        0x04,
+        0x00,
+        // Diagnostic message (empty)
+        0x04,
+        0x00,
+    ];
 
     response
 }
@@ -874,7 +863,7 @@ fn create_error_response(message_id: u32, op_type: u8, result_code: u8) -> Vec<u
 mod tests {
     use super::*;
     use crate::db::mock::MockDbService;
-    use crate::models::{Group, User};
+    use crate::models::User;
     use chrono::Utc;
 
     #[test]

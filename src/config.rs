@@ -57,7 +57,7 @@ impl Config {
     }
 
     pub fn redis_url(&self) -> String {
-        let mut url = format!("redis://");
+        let mut url = "redis://".to_string();
 
         if let (Some(username), Some(password)) = (&self.redis_username, &self.redis_password) {
             url.push_str(&format!("{}:{}@", username, password));
