@@ -1,18 +1,26 @@
 use ldap_auth_rs::{
-    api, config::Config, db::DbService, models::{GroupCreate, UserCreate}, redis_db::RedisDbService,
+    api,
+    config::Config,
+    db::DbService,
+    models::{GroupCreate, UserCreate},
+    redis_db::RedisDbService,
 };
 use reqwest::Client;
-use std::sync::Arc;
 use serde_json::json;
+use std::sync::Arc;
 
 // Consistent token for all integration tests (must match auth_integration_test.rs)
 const TEST_BEARER_TOKEN: &str = "test-bearer-token-12345";
 
 async fn setup_test_db() -> Arc<dyn DbService> {
-    let redis_url = std::env::var("TEST_REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
-    Arc::new(RedisDbService::new(&redis_url).await.expect("Failed to connect to Redis"))
+    let redis_url =
+        std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+    Arc::new(
+        RedisDbService::new(&redis_url)
+            .await
+            .expect("Failed to connect to Redis"),
+    )
 }
 
 #[tokio::test]
@@ -20,16 +28,16 @@ async fn test_api_user_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
     std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
-    
+
     let db = setup_test_db().await;
     let app = api::create_router(db);
-    
+
     // Start test server
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind");
     let addr = listener.local_addr().unwrap();
-    
+
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -52,7 +60,7 @@ async fn test_api_user_crud() {
         .send()
         .await
         .expect("Failed to create user");
-    
+
     assert_eq!(response.status(), 201);
 
     // Get user
@@ -62,7 +70,7 @@ async fn test_api_user_crud() {
         .send()
         .await
         .expect("Failed to get user");
-    
+
     assert_eq!(response.status(), 200);
 
     // Update user
@@ -77,7 +85,7 @@ async fn test_api_user_crud() {
         .send()
         .await
         .expect("Failed to update user");
-    
+
     assert_eq!(response.status(), 200);
 
     // Delete user
@@ -87,7 +95,7 @@ async fn test_api_user_crud() {
         .send()
         .await
         .expect("Failed to delete user");
-    
+
     assert_eq!(response.status(), 204);
 }
 
@@ -96,16 +104,16 @@ async fn test_api_group_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
     std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
-    
+
     let db = setup_test_db().await;
     let app = api::create_router(db.clone());
-    
+
     // Start test server
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind");
     let addr = listener.local_addr().unwrap();
-    
+
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -142,7 +150,7 @@ async fn test_api_group_crud() {
         .send()
         .await
         .expect("Failed to create group");
-    
+
     assert_eq!(response.status(), 201);
 
     // Add member to group
@@ -151,13 +159,16 @@ async fn test_api_group_crud() {
     });
 
     let response = client
-        .post(&format!("{}/api/groups/test-org/testgroup/members", base_url))
+        .post(&format!(
+            "{}/api/groups/test-org/testgroup/members",
+            base_url
+        ))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .json(&add_member)
         .send()
         .await
         .expect("Failed to add member");
-    
+
     assert_eq!(response.status(), 200);
 
     // Get group
@@ -167,17 +178,20 @@ async fn test_api_group_crud() {
         .send()
         .await
         .expect("Failed to get group");
-    
+
     assert_eq!(response.status(), 200);
 
     // Remove member from group
     let response = client
-        .delete(&format!("{}/api/groups/test-org/testgroup/members/groupuser", base_url))
+        .delete(&format!(
+            "{}/api/groups/test-org/testgroup/members/groupuser",
+            base_url
+        ))
         .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
         .send()
         .await
         .expect("Failed to remove member");
-    
+
     assert_eq!(response.status(), 200);
 
     // Delete group
@@ -187,7 +201,7 @@ async fn test_api_group_crud() {
         .send()
         .await
         .expect("Failed to delete group");
-    
+
     assert_eq!(response.status(), 204);
 
     // Cleanup user
@@ -203,12 +217,12 @@ async fn test_api_group_crud() {
 async fn test_health_check() {
     let db = setup_test_db().await;
     let app = api::create_router(db);
-    
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind");
     let addr = listener.local_addr().unwrap();
-    
+
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -221,6 +235,6 @@ async fn test_health_check() {
         .send()
         .await
         .expect("Failed to check health");
-    
+
     assert_eq!(response.status(), 200);
 }

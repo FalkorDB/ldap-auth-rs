@@ -38,7 +38,8 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3389), // Non-privileged port
-            ldap_base_dn: env::var("LDAP_BASE_DN").unwrap_or_else(|_| "dc=example,dc=com".to_string()),
+            ldap_base_dn: env::var("LDAP_BASE_DN")
+                .unwrap_or_else(|_| "dc=example,dc=com".to_string()),
             tls_cert_path: env::var("TLS_CERT_PATH").ok(),
             tls_key_path: env::var("TLS_KEY_PATH").ok(),
             enable_tls,
@@ -55,13 +56,13 @@ impl Config {
 
     pub fn redis_url(&self) -> String {
         let mut url = format!("redis://");
-        
+
         if let (Some(username), Some(password)) = (&self.redis_username, &self.redis_password) {
             url.push_str(&format!("{}:{}@", username, password));
         } else if let Some(username) = &self.redis_username {
             url.push_str(&format!("{}@", username));
         }
-        
+
         url.push_str(&format!("{}:{}", self.redis_host, self.redis_port));
         url
     }
@@ -92,7 +93,7 @@ impl Config {
             } else {
                 anyhow::bail!("ENABLE_TLS is true but TLS_CERT_PATH is not set");
             }
-            
+
             if let Some(key_path) = &self.tls_key_path {
                 if !std::path::Path::new(key_path).exists() {
                     anyhow::bail!("TLS key file not found: {}", key_path);
@@ -103,13 +104,14 @@ impl Config {
         }
 
         // Validate addresses are parseable
-        self.api_address().parse::<std::net::SocketAddr>()
+        self.api_address()
+            .parse::<std::net::SocketAddr>()
             .map_err(|e| anyhow::anyhow!("Invalid API_PORT {}: {}", self.api_port, e))?;
-        
-        self.ldap_address().parse::<std::net::SocketAddr>()
+
+        self.ldap_address()
+            .parse::<std::net::SocketAddr>()
             .map_err(|e| anyhow::anyhow!("Invalid LDAP_PORT {}: {}", self.ldap_port, e))?;
 
         Ok(())
     }
 }
-

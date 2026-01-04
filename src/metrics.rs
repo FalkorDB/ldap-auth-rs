@@ -1,13 +1,10 @@
-use axum_prometheus::{
-    metrics_exporter_prometheus::PrometheusHandle, PrometheusMetricLayer,
-};
+use axum_prometheus::{metrics_exporter_prometheus::PrometheusHandle, PrometheusMetricLayer};
 use once_cell::sync::Lazy;
 
 /// Global Prometheus metrics layer and handle
 /// Initialized once on first use to avoid registry conflicts in tests
-static METRICS: Lazy<(PrometheusMetricLayer<'static>, PrometheusHandle)> = Lazy::new(|| {
-    PrometheusMetricLayer::pair()
-});
+static METRICS: Lazy<(PrometheusMetricLayer<'static>, PrometheusHandle)> =
+    Lazy::new(|| PrometheusMetricLayer::pair());
 
 /// Get the global Prometheus metrics layer and handle
 /// This ensures only one registry is created, allowing tests to run without conflicts
@@ -18,8 +15,8 @@ pub fn get_prometheus_layer() -> (PrometheusMetricLayer<'static>, PrometheusHand
 
 /// Custom metrics for application-specific tracking
 pub mod custom {
-    use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
     use once_cell::sync::Lazy;
+    use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
 
     /// Authentication attempts counter (success/failure)
     pub static AUTH_ATTEMPTS: Lazy<CounterVec> = Lazy::new(|| {
@@ -84,9 +81,7 @@ pub fn record_auth_attempt(org: &str, success: bool) {
 /// Helper function to record LDAP bind operations
 pub fn record_ldap_bind(org: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
-    custom::LDAP_BINDS
-        .with_label_values(&[org, result])
-        .inc();
+    custom::LDAP_BINDS.with_label_values(&[org, result]).inc();
 }
 
 /// Helper function to record user operations

@@ -9,7 +9,12 @@ use serde_json::Value;
 #[command(about = "CLI tool for interacting with the LDAP Auth Service API", long_about = None)]
 struct Cli {
     /// API base URL (defaults to http://localhost:8080)
-    #[arg(short, long, env = "LDAP_AUTH_URL", default_value = "http://localhost:8080")]
+    #[arg(
+        short,
+        long,
+        env = "LDAP_AUTH_URL",
+        default_value = "http://localhost:8080"
+    )]
     url: String,
 
     /// Bearer token for authentication
@@ -248,8 +253,7 @@ async fn make_request(
         anyhow::bail!("Request failed with status {}: {}", status, text);
     }
 
-    let value: Value = serde_json::from_str(&text)
-        .context("Failed to parse response as JSON")?;
+    let value: Value = serde_json::from_str(&text).context("Failed to parse response as JSON")?;
 
     Ok(value)
 }
@@ -294,7 +298,10 @@ async fn main() -> Result<()> {
                 email,
                 name,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users", cli.url);
                 let user = UserCreate {
                     organization: org,
@@ -315,16 +322,24 @@ async fn main() -> Result<()> {
             }
 
             UserCommands::Get { org, username } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users/{}/{}", cli.url, org, username);
-                let response = make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
                 print_response(response);
             }
 
             UserCommands::List { org } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users/{}", cli.url, org);
-                let response = make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
                 print_response(response);
             }
 
@@ -335,7 +350,10 @@ async fn main() -> Result<()> {
                 name,
                 password,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users/{}/{}", cli.url, org, username);
                 let update = UserUpdate {
                     email,
@@ -354,16 +372,24 @@ async fn main() -> Result<()> {
             }
 
             UserCommands::Delete { org, username } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users/{}/{}", cli.url, org, username);
-                let response = make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
                 print_response(response);
             }
 
             UserCommands::Groups { org, username } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/users/{}/{}/groups", cli.url, org, username);
-                let response = make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
                 print_response(response);
             }
         },
@@ -374,7 +400,10 @@ async fn main() -> Result<()> {
                 name,
                 description,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups", cli.url);
                 let group = GroupCreate {
                     organization: org,
@@ -393,16 +422,24 @@ async fn main() -> Result<()> {
             }
 
             GroupCommands::Get { org, name } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups/{}/{}", cli.url, org, name);
-                let response = make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
                 print_response(response);
             }
 
             GroupCommands::List { org } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups/{}", cli.url, org);
-                let response = make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::GET, &url, Some(token), None).await?;
                 print_response(response);
             }
 
@@ -411,7 +448,10 @@ async fn main() -> Result<()> {
                 name,
                 description,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups/{}/{}", cli.url, org, name);
                 let update = GroupUpdate { description };
                 let response = make_request(
@@ -426,9 +466,13 @@ async fn main() -> Result<()> {
             }
 
             GroupCommands::Delete { org, name } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups/{}/{}", cli.url, org, name);
-                let response = make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
+                let response =
+                    make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
                 print_response(response);
             }
 
@@ -437,7 +481,10 @@ async fn main() -> Result<()> {
                 name,
                 username,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
                 let url = format!("{}/api/groups/{}/{}/members", cli.url, org, name);
                 let req = AddMemberRequest { username };
                 let response = make_request(
@@ -456,9 +503,16 @@ async fn main() -> Result<()> {
                 name,
                 username,
             } => {
-                let token = cli.token.as_deref().context("Token required for this operation")?;
-                let url = format!("{}/api/groups/{}/{}/members/{}", cli.url, org, name, username);
-                let response = make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
+                let token = cli
+                    .token
+                    .as_deref()
+                    .context("Token required for this operation")?;
+                let url = format!(
+                    "{}/api/groups/{}/{}/members/{}",
+                    cli.url, org, name, username
+                );
+                let response =
+                    make_request(&client, reqwest::Method::DELETE, &url, Some(token), None).await?;
                 print_response(response);
             }
         },

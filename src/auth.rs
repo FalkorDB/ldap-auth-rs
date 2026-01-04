@@ -47,7 +47,10 @@ pub async fn validate_bearer_token(
     }
 
     // Token is valid, proceed with request
-    info!(event = "auth_success", "Valid authentication token provided");
+    info!(
+        event = "auth_success",
+        "Valid authentication token provided"
+    );
     Ok(next.run(request).await)
 }
 
@@ -64,8 +67,14 @@ impl IntoResponse for AuthError {
         let (status, message) = match self {
             AuthError::MissingToken => (StatusCode::UNAUTHORIZED, "Missing authorization token"),
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid authorization token"),
-            AuthError::InvalidTokenFormat => (StatusCode::UNAUTHORIZED, "Invalid authorization format. Expected: Bearer <token>"),
-            AuthError::ConfigurationError => (StatusCode::INTERNAL_SERVER_ERROR, "Server configuration error"),
+            AuthError::InvalidTokenFormat => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid authorization format. Expected: Bearer <token>",
+            ),
+            AuthError::ConfigurationError => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server configuration error",
+            ),
         };
 
         (status, message).into_response()
@@ -77,12 +86,12 @@ mod tests {
     use super::*;
     use axum::{
         body::Body,
-        http::{Request as HttpRequest, header},
+        http::{header, Request as HttpRequest},
     };
 
     // Note: These tests verify the error conditions
     // Full integration tests are in tests/auth_integration_test.rs
-    
+
     #[test]
     fn test_auth_error_responses() {
         let missing = AuthError::MissingToken;

@@ -3,41 +3,38 @@ use axum::{
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    Json, Router,
     routing::{delete, get, post, put},
+    Json, Router,
 };
-use tower_http::timeout::TimeoutLayer;
-use std::time::Duration;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
+use tower_http::timeout::TimeoutLayer;
 use tracing::{info, instrument, Instrument};
 
 use crate::auth::validate_bearer_token;
 use crate::db::DbService;
 use crate::error::AppError;
-use crate::models::{GroupCreate, GroupUpdate, UserCreate, UserUpdate, UserResponse};
+use crate::models::{GroupCreate, GroupUpdate, UserCreate, UserResponse, UserUpdate};
 use uuid::Uuid;
 
 /// Middleware to add request ID to all requests
-async fn add_request_id(
-    mut request: Request,
-    next: Next,
-) -> Response {
+async fn add_request_id(mut request: Request, next: Next) -> Response {
     let request_id = Uuid::new_v4();
     request.extensions_mut().insert(request_id);
-    
+
     let span = tracing::info_span!(
         "request",
         request_id = %request_id,
         method = %request.method(),
         uri = %request.uri()
     );
-    
-    let response = async move {
-        next.run(request).await
-    }.instrument(span).await;
-    
+
+    let response = async move { next.run(request).await }
+        .instrument(span)
+        .await;
+
     response
 }
 
@@ -53,7 +50,7 @@ struct ApiResponse<T> {
 
 #[derive(Serialize)]
 struct HealthStatus {
-    status: String,  // "healthy", "degraded", "unhealthy"
+    status: String, // "healthy", "degraded", "unhealthy"
     redis: bool,
     timestamp: String,
 }
@@ -83,8 +80,14 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::AlreadyExists(msg) => (StatusCode::CONFLICT, msg),
             AppError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
-            AppError::AuthenticationFailed => (StatusCode::UNAUTHORIZED, "Authentication failed".to_string()),
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
+            AppError::AuthenticationFailed => (
+                StatusCode::UNAUTHORIZED,
+                "Authentication failed".to_string(),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
         };
 
         (status, Json(ApiResponse::<()>::error(message))).into_response()
@@ -152,7 +155,10 @@ async fn create_group(
     info!("Creating new group");
     let created_group = db.create_group(group).await?;
     info!("Group created successfully");
-    Ok((StatusCode::CREATED, Json(ApiResponse::success(created_group))))
+    Ok((
+        StatusCode::CREATED,
+        Json(ApiResponse::success(created_group)),
+    ))
 }
 
 async fn get_group(
@@ -221,25 +227,25 @@ async fn get_user_groups(
 // Health check
 async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let redis_healthy = db.health_check().await.unwrap_or(false);
-    
+
     let status = if redis_healthy {
         "healthy"
     } else {
         "unhealthy"
     };
-    
+
     let health = HealthStatus {
         status: status.to_string(),
         redis: redis_healthy,
         timestamp: Utc::now().to_rfc3339(),
     };
-    
+
     let http_status = if redis_healthy {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    
+
     Ok((http_status, Json(ApiResponse::success(health))))
 }
 
@@ -261,17 +267,26 @@ pub fn create_router(db: Arc<dyn DbService>) -> Router {
         .route("/api/groups/:org/:name", put(update_group))
         .route("/api/groups/:org/:name", delete(delete_group))
         .route("/api/groups/:org/:name/members", post(add_member_to_group))
-        .route("/api/groups/:org/:name/members/:username", delete(remove_member_from_group))
+        .route(
+            "/api/groups/:org/:name/members/:username",
+            delete(remove_member_from_group),
+        )
         .layer(middleware::from_fn(validate_bearer_token));
 
     // Build router with metrics, timeout, and request ID
     let (prometheus_layer, prometheus_handle) = crate::metrics::get_prometheus_layer();
     Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(move || async move { prometheus_handle.render() }))
+        .route(
+            "/metrics",
+            get(move || async move { prometheus_handle.render() }),
+        )
         .merge(protected_routes)
         .layer(middleware::from_fn(add_request_id))
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
         .layer(prometheus_layer)
         .with_state(db)
 }
@@ -285,9 +300,9 @@ mod tests {
     async fn test_health_check_mock() {
         let mut mock_db = MockDbService::new();
         mock_db.expect_health_check().returning(|| Ok(true));
-        
+
         let _app = create_router(Arc::new(mock_db));
-        
+
         // Just verify the router can be created with a mock
         // Full integration testing is done in integration tests
     }

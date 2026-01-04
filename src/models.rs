@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
@@ -88,7 +88,8 @@ impl User {
             updated_at: now,
         }
     }
-    #[allow(dead_code)]    pub fn to_dn(&self, base_dn: &str) -> String {
+    #[allow(dead_code)]
+    pub fn to_dn(&self, base_dn: &str) -> String {
         format!("cn={},ou={},{}", self.username, self.organization, base_dn)
     }
 }
@@ -108,7 +109,10 @@ impl Group {
 
     #[allow(dead_code)]
     pub fn to_dn(&self, base_dn: &str) -> String {
-        format!("cn={},ou=groups,ou={},{}", self.name, self.organization, base_dn)
+        format!(
+            "cn={},ou=groups,ou={},{}",
+            self.name, self.organization, base_dn
+        )
     }
 
     pub fn add_member(&mut self, username: String) -> bool {
@@ -150,11 +154,7 @@ mod tests {
 
     #[test]
     fn test_user_dn() {
-        let user = User::new(
-            "acme".to_string(),
-            "john".to_string(),
-            "hash".to_string(),
-        );
+        let user = User::new("acme".to_string(), "john".to_string(), "hash".to_string());
         let dn = user.to_dn("dc=example,dc=com");
         assert_eq!(dn, "cn=john,ou=acme,dc=example,dc=com");
     }

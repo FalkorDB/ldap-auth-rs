@@ -1,6 +1,4 @@
-use ldap_auth_rs::{
-    api, db::DbService, models::UserCreate, redis_db::RedisDbService,
-};
+use ldap_auth_rs::{api, db::DbService, models::UserCreate, redis_db::RedisDbService};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -24,9 +22,7 @@ async fn start_test_server(db: Arc<dyn DbService>, port: u16) {
         .expect("Failed to bind test server");
 
     tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .expect("Test server error");
+        axum::serve(listener, app).await.expect("Test server error");
     });
 
     // Give server time to start
@@ -58,7 +54,7 @@ async fn test_api_requires_auth() {
     start_test_server(db.clone(), port).await;
 
     let client = reqwest::Client::new();
-    
+
     // Try to access protected endpoint without token
     let response = client
         .get(format!("http://127.0.0.1:{}/api/users/testorg", port))
@@ -77,7 +73,7 @@ async fn test_api_with_invalid_token() {
     start_test_server(db.clone(), port).await;
 
     let client = reqwest::Client::new();
-    
+
     // Try with wrong token
     let response = client
         .get(format!("http://127.0.0.1:{}/api/users/testorg", port))
@@ -97,7 +93,7 @@ async fn test_api_with_valid_token() {
     start_test_server(db.clone(), port).await;
 
     let client = reqwest::Client::new();
-    
+
     // Create a user first
     let user_create = UserCreate {
         organization: "testorg".to_string(),
@@ -139,7 +135,7 @@ async fn test_api_invalid_auth_format() {
     start_test_server(db.clone(), port).await;
 
     let client = reqwest::Client::new();
-    
+
     // Try with Basic auth instead of Bearer
     let response = client
         .get(format!("http://127.0.0.1:{}/api/users/testorg", port))
@@ -159,19 +155,32 @@ async fn test_all_protected_endpoints_require_auth() {
     start_test_server(db.clone(), port).await;
 
     let client = reqwest::Client::new();
-    
+
     let endpoints = vec![
-        ("GET", format!("http://127.0.0.1:{}/api/users/testorg", port)),
-        ("GET", format!("http://127.0.0.1:{}/api/users/testorg/testuser", port)),
-        ("GET", format!("http://127.0.0.1:{}/api/groups/testorg", port)),
-        ("GET", format!("http://127.0.0.1:{}/api/groups/testorg/testgroup", port)),
+        (
+            "GET",
+            format!("http://127.0.0.1:{}/api/users/testorg", port),
+        ),
+        (
+            "GET",
+            format!("http://127.0.0.1:{}/api/users/testorg/testuser", port),
+        ),
+        (
+            "GET",
+            format!("http://127.0.0.1:{}/api/groups/testorg", port),
+        ),
+        (
+            "GET",
+            format!("http://127.0.0.1:{}/api/groups/testorg/testgroup", port),
+        ),
     ];
 
     for (method, url) in endpoints {
         let response = match method {
             "GET" => client.get(&url).send().await,
             _ => panic!("Unsupported method"),
-        }.expect("Failed to send request");
+        }
+        .expect("Failed to send request");
 
         assert_eq!(
             response.status(),

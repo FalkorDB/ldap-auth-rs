@@ -19,7 +19,9 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
         .collect();
 
     if certs.is_empty() {
-        return Err(AppError::Internal("No certificates found in file".to_string()));
+        return Err(AppError::Internal(
+            "No certificates found in file".to_string(),
+        ));
     }
 
     // Load private key
@@ -33,7 +35,9 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
         .collect();
 
     if keys.is_empty() {
-        return Err(AppError::Internal("No private keys found in file".to_string()));
+        return Err(AppError::Internal(
+            "No private keys found in file".to_string(),
+        ));
     }
 
     let key = keys.remove(0);
@@ -55,9 +59,10 @@ pub fn generate_test_certs() -> Result<(String, String)> {
     use std::process::Command;
 
     let temp_dir = std::env::temp_dir();
-    
+
     // Generate unique filenames using timestamp and random number to avoid conflicts between tests
-    let unique_id = format!("{}-{}", 
+    let unique_id = format!(
+        "{}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("System clock is set before UNIX epoch - this should never happen")
@@ -68,42 +73,47 @@ pub fn generate_test_certs() -> Result<(String, String)> {
     let key_path = temp_dir.join(format!("test-key-{}.pem", unique_id));
 
     // Generate self-signed certificate using openssl with X.509 v3 extensions for rustls compatibility
-    let key_path_str = key_path.to_str()
+    let key_path_str = key_path
+        .to_str()
         .ok_or_else(|| AppError::Internal("Invalid UTF-8 in key path".to_string()))?;
-    let cert_path_str = cert_path.to_str()
+    let cert_path_str = cert_path
+        .to_str()
         .ok_or_else(|| AppError::Internal("Invalid UTF-8 in cert path".to_string()))?;
-    
+
     let output = Command::new("openssl")
         .args(&[
-            "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-            "-keyout", key_path_str,
-            "-out", cert_path_str,
-            "- days", "1",
-            "-subj", "/CN=localhost",
-            "-addext", "subjectAltName=DNS:localhost",
-            "-addext", "basicConstraints=CA:FALSE",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            key_path_str,
+            "-out",
+            cert_path_str,
+            "- days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost",
+            "-addext",
+            "basicConstraints=CA:FALSE",
         ])
         .output();
 
     match output {
         Ok(result) if result.status.success() => {
-            Ok((
-                cert_path_str.to_string(),
-                key_path_str.to_string(),
-            ))
+            Ok((cert_path_str.to_string(), key_path_str.to_string()))
         }
-        Ok(result) => {
-            Err(AppError::Internal(format!(
-                "Failed to generate test certificates: {}",
-                String::from_utf8_lossy(&result.stderr)
-            )))
-        }
-        Err(e) => {
-            Err(AppError::Internal(format!(
-                "Failed to execute openssl: {}. Note: openssl must be installed for TLS tests",
-                e
-            )))
-        }
+        Ok(result) => Err(AppError::Internal(format!(
+            "Failed to generate test certificates: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ))),
+        Err(e) => Err(AppError::Internal(format!(
+            "Failed to execute openssl: {}. Note: openssl must be installed for TLS tests",
+            e
+        ))),
     }
 }
 
@@ -115,15 +125,17 @@ mod tests {
     fn test_generate_test_certs() {
         // This test requires openssl to be installed
         let result = generate_test_certs();
-        
+
         if result.is_err() {
-            eprintln!("Warning: Failed to generate test certificates. OpenSSL may not be installed.");
+            eprintln!(
+                "Warning: Failed to generate test certificates. OpenSSL may not be installed."
+            );
             eprintln!("Error: {:?}", result.err());
             return;
         }
 
         let (cert_path, key_path) = result.unwrap();
-        
+
         // Verify files exist
         assert!(std::path::Path::new(&cert_path).exists());
         assert!(std::path::Path::new(&key_path).exists());
