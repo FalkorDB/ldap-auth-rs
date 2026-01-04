@@ -1,7 +1,8 @@
 use ldap_auth_rs::{
     db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService, tls,
 };
-use rustls::{ClientConfig, RootCertStore, ServerName};
+use rustls::{ClientConfig, RootCertStore};
+use rustls_pki_types::ServerName;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -671,17 +672,18 @@ async fn test_ldap_bind_success_tls() {
     // Load the certificate for client
     let cert_file = std::fs::File::open(&cert_path).expect("Failed to open cert");
     let mut reader = BufReader::new(cert_file);
-    let certs = rustls_pemfile::certs(&mut reader).expect("Failed to parse certs");
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<_, _>>()
+        .expect("Failed to parse certs");
 
     let mut root_store = RootCertStore::empty();
     for cert in certs {
         root_store
-            .add(&rustls::Certificate(cert))
+            .add(cert)
             .expect("Failed to add cert to root store");
     }
 
     let config = ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
@@ -690,7 +692,9 @@ async fn test_ldap_bind_success_tls() {
         .await
         .expect("Failed to connect");
 
-    let domain = ServerName::try_from("localhost").expect("Invalid DNS name");
+    let domain = ServerName::try_from("localhost")
+        .expect("Invalid DNS name")
+        .to_owned();
 
     let mut tls_stream = connector
         .connect(domain, tcp_stream)
@@ -752,17 +756,18 @@ async fn test_ldap_search_authenticated_tls() {
     // Load the certificate for client
     let cert_file = std::fs::File::open(&cert_path).expect("Failed to open cert");
     let mut reader = BufReader::new(cert_file);
-    let certs = rustls_pemfile::certs(&mut reader).expect("Failed to parse certs");
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<_, _>>()
+        .expect("Failed to parse certs");
 
     let mut root_store = RootCertStore::empty();
     for cert in certs {
         root_store
-            .add(&rustls::Certificate(cert))
+            .add(cert)
             .expect("Failed to add cert to root store");
     }
 
     let config = ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
@@ -771,7 +776,9 @@ async fn test_ldap_search_authenticated_tls() {
         .await
         .expect("Failed to connect");
 
-    let domain = ServerName::try_from("localhost").expect("Invalid DNS name");
+    let domain = ServerName::try_from("localhost")
+        .expect("Invalid DNS name")
+        .to_owned();
 
     let mut tls_stream = connector
         .connect(domain, tcp_stream)
@@ -853,17 +860,18 @@ async fn test_ldap_invalid_credentials_tls() {
     // Load the certificate for client
     let cert_file = std::fs::File::open(&cert_path).expect("Failed to open cert");
     let mut reader = BufReader::new(cert_file);
-    let certs = rustls_pemfile::certs(&mut reader).expect("Failed to parse certs");
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<_, _>>()
+        .expect("Failed to parse certs");
 
     let mut root_store = RootCertStore::empty();
     for cert in certs {
         root_store
-            .add(&rustls::Certificate(cert))
+            .add(cert)
             .expect("Failed to add cert to root store");
     }
 
     let config = ClientConfig::builder()
-        .with_safe_defaults()
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
@@ -872,7 +880,9 @@ async fn test_ldap_invalid_credentials_tls() {
         .await
         .expect("Failed to connect");
 
-    let domain = ServerName::try_from("localhost").expect("Invalid DNS name");
+    let domain = ServerName::try_from("localhost")
+        .expect("Invalid DNS name")
+        .to_owned();
 
     let mut tls_stream = connector
         .connect(domain, tcp_stream)
