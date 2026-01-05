@@ -65,3 +65,27 @@ mockall = "0.12"
 testcontainers = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 tokio-test = "0.4"
+
+# Profile optimizations
+[profile.dev]
+# Disable debug info in dev builds to speed up compilation
+debug = 0
+# Keep incremental compilation for local development
+incremental = true
+
+[profile.release]
+# No debug info in release builds
+debug = 0
+# Enable LTO for smaller binaries
+lto = "thin"
+# Optimize for size
+opt-level = "z"
+# Fewer codegen units for better optimization
+codegen-units = 1
+# Strip symbols
+strip = true
+
+[profile.test]
+# Faster test compilation
+debug = 0
+incremental = true
