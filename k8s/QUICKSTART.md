@@ -4,7 +4,17 @@
 
 ```bash
 # 1. Install StringSecret operator (for auto-generated secrets)
-kubectl apply -f https://github.com/mittwald/kubernetes-secret-generator/releases/latest/download/secret-generator.yaml
+helm repo add mittwald https://helm.mittwald.de
+helm repo update
+helm upgrade --install kubernetes-secret-generator mittwald/kubernetes-secret-generator
+
+# 2. Install cert manager 
+helm install \
+  cert-manager oci://quay.io/jetstack/charts/cert-manager \
+  --version v1.19.2 \
+  --namespace cert-manager \
+  --create-namespace \
+  --set crds.enabled=true
 ```
 
 ## �🚀 Deploy Commands

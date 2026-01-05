@@ -34,9 +34,10 @@ FROM alpine:3.21
 
 WORKDIR /app
 
-# Install only runtime dependencies (OpenSSL and CA certificates)
+# Install only runtime dependencies (OpenSSL, curl, and CA certificates)
 RUN apk add --no-cache \
     ca-certificates \
+    curl \
     libgcc \
     openssl \
     tzdata

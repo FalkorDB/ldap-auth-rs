@@ -35,7 +35,7 @@ spec:
       
       containers:
       - name: ldap-auth-rs
-        image: ldap-auth-rs:latest
+        image: docker.io/falkordb/ldap-auth-rs:latest
         imagePullPolicy: IfNotPresent
         
         ports:
@@ -67,9 +67,10 @@ spec:
               fieldPath: status.podIP
         
         livenessProbe:
-          httpGet:
-            path: /health
-            port: http
+          exec:
+            command:
+            - /bin/sh
+            - /scripts/health-check.sh
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -77,9 +78,10 @@ spec:
           successThreshold: 1
         
         readinessProbe:
-          httpGet:
-            path: /health
-            port: http
+          exec:
+            command:
+            - /bin/sh
+            - /scripts/health-check.sh
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
@@ -87,9 +89,10 @@ spec:
           successThreshold: 1
         
         startupProbe:
-          httpGet:
-            path: /health
-            port: http
+          exec:
+            command:
+            - /bin/sh
+            - /scripts/health-check.sh
           initialDelaySeconds: 0
           periodSeconds: 5
           timeoutSeconds: 3
@@ -121,6 +124,9 @@ spec:
         - name: tls-certs
           mountPath: /etc/tls
           readOnly: true
+        - name: health-check-script
+          mountPath: /scripts
+          readOnly: true
       
       volumes:
       - name: tmp
@@ -131,6 +137,10 @@ spec:
         secret:
           secretName: ldap-auth-tls
           defaultMode: 0440
+      - name: health-check-script
+        configMap:
+          name: health-check-script
+          defaultMode: 0555
       
       topologySpreadConstraints:
       - maxSkew: 1

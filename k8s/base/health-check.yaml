@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: health-check-script
+  labels:
+    app.kubernetes.io/component: config
+data:
+  health-check.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Determine protocol based on ENABLE_TLS
+    if [ "${ENABLE_TLS}" = "true" ]; then
+      SCHEME="https"
+      CURL_OPTS="-k"  # Accept self-signed certificates
+    else
+      SCHEME="http"
+      CURL_OPTS=""
+    fi
+    
+    # Perform health check
+    curl -f -s ${CURL_OPTS} "${SCHEME}://localhost:${API_PORT:-8080}/health" > /dev/null
