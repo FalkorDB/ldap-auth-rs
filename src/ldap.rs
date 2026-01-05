@@ -1501,8 +1501,10 @@ mod tests {
         // Proper WhoAmI extended request payload with OID 1.3.6.1.4.1.4203.1.11.3
         let whoami_oid = b"1.3.6.1.4.1.4203.1.11.3";
         let payload = vec![
-            0x77, (whoami_oid.len() + 2) as u8, // Extended request tag and length
-            0x80, whoami_oid.len() as u8,        // OID tag (CONTEXT 0) and length
+            0x77,
+            (whoami_oid.len() + 2) as u8, // Extended request tag and length
+            0x80,
+            whoami_oid.len() as u8, // OID tag (CONTEXT 0) and length
         ];
         let mut full_payload = payload;
         full_payload.extend_from_slice(whoami_oid);
@@ -1525,8 +1527,10 @@ mod tests {
         // Proper WhoAmI extended request payload with OID 1.3.6.1.4.1.4203.1.11.3
         let whoami_oid = b"1.3.6.1.4.1.4203.1.11.3";
         let payload = vec![
-            0x77, (whoami_oid.len() + 2) as u8, // Extended request tag and length
-            0x80, whoami_oid.len() as u8,        // OID tag (CONTEXT 0) and length
+            0x77,
+            (whoami_oid.len() + 2) as u8, // Extended request tag and length
+            0x80,
+            whoami_oid.len() as u8, // OID tag (CONTEXT 0) and length
         ];
         let mut full_payload = payload;
         full_payload.extend_from_slice(whoami_oid);
@@ -1537,7 +1541,7 @@ mod tests {
         // Per RFC 4532: Anonymous should return success with empty authorization identity
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 0); // Success
-        // Response should contain "dn:" with empty value
+                                                  // Response should contain "dn:" with empty value
         let response_str = String::from_utf8_lossy(&response);
         assert!(response_str.contains("dn:"));
     }
