@@ -1,3 +1,51 @@
+//! Simplified LDAP Server Implementation
+//!
+//! # RFC Compliance Status
+//!
+//! This is a simplified LDAP v3 server implementation with the following limitations:
+//!
+//! ## Implemented Operations (RFC 4511)
+//! - **Bind Request/Response**: Simple authentication with username/password (Section 4.2)
+//! - **Unbind Request**: Clean connection termination (Section 4.3)
+//! - **Search Request/Response**: Basic user search with authorization checks (Section 4.5)
+//! - **Extended Operations**: WhoAmI (RFC 4532) and StartTLS (RFC 4511 Section 4.14)
+//!
+//! ## Known Limitations
+//!
+//! ### 1. Search Request Parsing (RFC 4511 Section 4.5.1)
+//! - **Base DN**: Not extracted from request, uses configured base_dn
+//! - **Search Scope**: Not parsed (base, one-level, subtree ignored)
+//! - **Filter**: Not parsed, returns all users in organization
+//! - **Attributes**: Requested attributes are ignored, always returns cn and mail
+//! - **Size/Time Limits**: Not enforced
+//!
+//! ### 2. DN Format Support
+//! - Only supports: `cn=username,ou=organization,dc=...`
+//! - Does NOT support:
+//!   - Multiple OUs: `cn=user,ou=dept,ou=company,dc=...`
+//!   - Alternative RDN types: `uid=user` or `mail=user@example.com`
+//!   - Escaped characters in DN components
+//!
+//! ### 3. Extended Operations
+//! - WhoAmI: Fully implemented per RFC 4532
+//! - StartTLS: Returns unavailable (TLS should be enabled at server start)
+//! - Other extended operations: Not supported
+//!
+//! ### 4. Unsupported Operations
+//! - Modify, Add, Delete, ModifyDN, Compare operations
+//! - SASL authentication (only simple bind supported)
+//! - Referrals and continuations
+//! - Controls (RFC 4511 Section 4.1.11)
+//!
+//! ### 5. Protocol Encoding
+//! - Uses simplified BER/DER parsing
+//! - For production use, consider a proper ASN.1/BER library like `ldap3` or `lber`
+//!
+//! ## Security Model
+//! - Anonymous bind allowed but search returns empty results unless authorized
+//! - `search_bind_org` configuration restricts search to specific organization
+//! - TLS strongly recommended for production (use `run_with_tls`)
+
 use rustls::ServerConfig;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,7 +81,7 @@ enum LdapOp {
     ExtendedResponse = 24,
 }
 
-/// LDAP result codes
+/// LDAP result codes (RFC 4511 Appendix A)
 #[allow(dead_code)]
 enum LdapResultCode {
     Success = 0,
@@ -50,6 +98,8 @@ enum LdapResultCode {
     Busy = 51,
     Unavailable = 52,
     UnwillingToPerform = 53,
+    NoSuchObject = 32,
+    InvalidDNSyntax = 34,
     Other = 80,
 }
 
@@ -649,23 +699,118 @@ async fn handle_search_request(
 
 async fn handle_extended_request(
     message_id: u32,
-    _payload: &[u8],
+    payload: &[u8],
     authenticated_user: &Option<String>,
     authenticated_org: &Option<String>,
 ) -> Vec<u8> {
     debug!("Processing extended request");
 
-    // Check if it's a WhoAmI request (OID: 1.3.6.1.4.1.4203.1.11.3)
-    // Per RFC 4532: return authorization identity for authenticated users,
-    // or empty string for anonymous/unauthenticated users (NOT an error)
+    // Parse the OID from the extended request (RFC 4511 Section 4.12)
+    // Extended request format: [APPLICATION 23] { requestName [0] LDAPOID, requestValue [1] OCTET STRING OPTIONAL }
+    let oid = match parse_extended_request_oid(payload) {
+        Ok(oid) => oid,
+        Err(e) => {
+            warn!("Failed to parse extended request OID: {}", e);
+            return create_extended_response(
+                message_id,
+                LdapResultCode::ProtocolError as u8,
+                None,
+                None,
+            );
+        }
+    };
 
-    if let (Some(user), Some(org)) = (authenticated_user, authenticated_org) {
-        let dn = format!("cn={},ou={}", user, org);
-        create_whoami_response(message_id, &dn)
-    } else {
-        // Anonymous/unauthenticated: return empty authorization identity
-        create_whoami_response(message_id, "")
+    debug!("Extended request OID: {}", oid);
+
+    match oid.as_str() {
+        // WhoAmI - RFC 4532
+        "1.3.6.1.4.1.4203.1.11.3" => {
+            // Per RFC 4532: return authorization identity for authenticated users,
+            // or empty string for anonymous/unauthenticated users (NOT an error)
+            if let (Some(user), Some(org)) = (authenticated_user, authenticated_org) {
+                let dn = format!("cn={},ou={}", user, org);
+                create_whoami_response(message_id, &dn)
+            } else {
+                // Anonymous/unauthenticated: return empty authorization identity
+                create_whoami_response(message_id, "")
+            }
+        }
+        // StartTLS - RFC 4511 Section 4.14
+        "1.3.6.1.4.1.1466.20037" => {
+            // StartTLS is not supported when TLS is already enabled
+            // Clients should connect to the TLS port directly
+            warn!("StartTLS requested but server requires TLS from start");
+            create_extended_response(
+                message_id,
+                LdapResultCode::Unavailable as u8,
+                Some("1.3.6.1.4.1.1466.20037"),
+                None,
+            )
+        }
+        // Unknown extended operation
+        _ => {
+            warn!("Unsupported extended operation: {}", oid);
+            create_extended_response(
+                message_id,
+                LdapResultCode::UnwillingToPerform as u8,
+                None,
+                None,
+            )
+        }
     }
+}
+
+/// Parse the OID from an extended request payload
+fn parse_extended_request_oid(payload: &[u8]) -> std::result::Result<String, String> {
+    if payload.is_empty() {
+        return Err("Empty extended request payload".to_string());
+    }
+
+    let mut pos = 0;
+
+    // Skip extended request tag (APPLICATION 23 = 0x77)
+    if payload[pos] & 0xf0 != 0x70 {
+        return Err(format!("Invalid extended request tag: {:#x}", payload[pos]));
+    }
+    pos += 1;
+
+    // Skip extended request length
+    if pos >= payload.len() {
+        return Err("Unexpected end at length".to_string());
+    }
+    let len_byte = payload[pos];
+    pos += 1;
+    if len_byte & 0x80 != 0 {
+        let num_octets = (len_byte & 0x7f) as usize;
+        if pos + num_octets > payload.len() {
+            return Err("Length octets exceed payload".to_string());
+        }
+        pos += num_octets;
+    }
+
+    // Parse OID (CONTEXT 0 = 0x80)
+    if pos >= payload.len() {
+        return Err("Unexpected end at OID tag".to_string());
+    }
+    if payload[pos] != 0x80 {
+        return Err(format!("Invalid OID tag: {:#x}", payload[pos]));
+    }
+    pos += 1;
+
+    // Parse OID length
+    if pos >= payload.len() {
+        return Err("Unexpected end at OID length".to_string());
+    }
+    let oid_len = payload[pos] as usize;
+    pos += 1;
+
+    if pos + oid_len > payload.len() {
+        return Err("OID length exceeds payload".to_string());
+    }
+
+    // Extract OID string
+    let oid = String::from_utf8_lossy(&payload[pos..pos + oid_len]).to_string();
+    Ok(oid)
 }
 
 fn create_bind_response(message_id: u32, result_code: u8) -> Vec<u8> {
@@ -816,39 +961,79 @@ fn create_search_done_response(message_id: u32, result_code: u8) -> Vec<u8> {
 }
 
 fn create_whoami_response(message_id: u32, dn: &str) -> Vec<u8> {
-    let mut response = Vec::new();
     let dn_bytes = format!("dn:{}", dn).into_bytes();
+    create_extended_response(
+        message_id,
+        LdapResultCode::Success as u8,
+        Some("1.3.6.1.4.1.4203.1.11.3"), // WhoAmI OID
+        Some(&dn_bytes),
+    )
+}
+
+fn create_extended_response(
+    message_id: u32,
+    result_code: u8,
+    response_name: Option<&str>,
+    response_value: Option<&[u8]>,
+) -> Vec<u8> {
+    let mut response = Vec::new();
+
+    // Calculate response name and value lengths
+    let response_name_len = response_name.map(|n| n.len() + 2).unwrap_or(0);
+    let response_value_len = response_value.map(|v| v.len() + 2).unwrap_or(0);
+    let ext_response_len = 7 + response_name_len + response_value_len; // 7 = result(3) + matchedDN(2) + diagnosticMessage(2)
 
     // SEQUENCE
     response.push(0x30);
-    response.push((11 + dn_bytes.len()) as u8);
+    let total_len = 4 + ext_response_len; // 4 = messageID(3) + extendedResp tag(1)
+    if total_len < 128 {
+        response.push(total_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(total_len as u8);
+    }
 
     // Message ID
     response.push(0x02);
     response.push(0x01);
     response.push(message_id as u8);
 
-    // Extended Response
-    response.push(0x78); // APPLICATION 24
-    response.push((dn_bytes.len() + 5) as u8);
+    // Extended Response (APPLICATION 24)
+    response.push(0x78);
+    if ext_response_len < 128 {
+        response.push(ext_response_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(ext_response_len as u8);
+    }
 
-    // Result code
+    // Result code (ENUMERATED)
     response.push(0x0a);
     response.push(0x01);
-    response.push(LdapResultCode::Success as u8);
+    response.push(result_code);
 
-    // Matched DN (empty)
+    // Matched DN (empty OCTET STRING)
     response.push(0x04);
     response.push(0x00);
 
-    // Diagnostic message (empty)
+    // Diagnostic message (empty OCTET STRING)
     response.push(0x04);
     response.push(0x00);
 
-    // Response value
-    response.push(0x8b); // CONTEXT 11
-    response.push(dn_bytes.len() as u8);
-    response.extend_from_slice(&dn_bytes);
+    // Response name [10] LDAPOID OPTIONAL
+    if let Some(name) = response_name {
+        let name_bytes = name.as_bytes();
+        response.push(0x8a); // CONTEXT 10
+        response.push(name_bytes.len() as u8);
+        response.extend_from_slice(name_bytes);
+    }
+
+    // Response value [11] OCTET STRING OPTIONAL
+    if let Some(value) = response_value {
+        response.push(0x8b); // CONTEXT 11
+        response.push(value.len() as u8);
+        response.extend_from_slice(value);
+    }
 
     response
 }
