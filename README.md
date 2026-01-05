@@ -12,6 +12,7 @@ A production-ready, lightweight Rust-based LDAP authentication service with REST
 - �️ **CLI Tool** bundled with Docker image for easy API interaction
 - 🔐 **Bearer Token Authentication** protecting all API endpoints  
 - 📂 **LDAP Interface** supporting bind, search, whoami, unbind operations
+- ✅ **LDAP Compliance Tests** with ldapsearch validation (RFC 4511/4532)
 - 🔒 **LDAP Search Authorization** - restrict search operations to specific organizations
 - 💾 **Redis Backend** with connection pooling and caching
 - 🔒 **TLS Support** for both API and LDAP servers
@@ -251,9 +252,14 @@ cargo test --test api_test
 cargo test --test ldap_test
 cargo test --test metrics_test
 
+# Run LDAP compliance tests with ldapsearch
+./tests/ldap_compliance_test.sh
+
 # Run with coverage
 cargo tarpaulin --out Html
 ```
+
+See [docs/LDAP_COMPLIANCE_TESTING.md](docs/LDAP_COMPLIANCE_TESTING.md) for detailed information about LDAP compliance testing.
 
 ## Deployment
 

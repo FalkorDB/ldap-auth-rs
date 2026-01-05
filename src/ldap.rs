@@ -20,7 +20,10 @@
 //! - **Size/Time Limits**: Not enforced
 //!
 //! ### 2. DN Format Support
-//! - Only supports: `cn=username,ou=organization,dc=...`
+//! - Supports:
+//!   - `cn=username,ou=organization,dc=...`
+//!   - `cn=username,dc=domain,dc=tld` (uses first DC as organization)
+//!   - Case-insensitive prefixes (cn/CN/Cn, ou/OU/Ou, dc/DC/Dc)
 //! - Does NOT support:
 //!   - Multiple OUs: `cn=user,ou=dept,ou=company,dc=...`
 //!   - Alternative RDN types: `uid=user` or `mail=user@example.com`
@@ -372,7 +375,10 @@ async fn handle_tls_connection(
 }
 
 /// Parse a DN to extract organization and username
-/// Format: cn=username,ou=organization,dc=example,dc=com
+/// Supported formats:
+/// - cn=username,ou=organization,dc=example,dc=com
+/// - cn=username,dc=domain,dc=tld (uses first DC as organization)
+/// Accepts both lowercase (cn=, ou=, dc=) and uppercase (CN=, OU=, DC=) prefixes
 fn parse_dn(dn: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = dn.split(',').collect();
     if parts.len() < 2 {
@@ -381,19 +387,32 @@ fn parse_dn(dn: &str) -> Option<(String, String)> {
 
     let mut username = None;
     let mut organization = None;
+    let mut first_dc = None;
 
     for part in parts {
         let part = part.trim();
-        if let Some(stripped) = part.strip_prefix("cn=") {
-            username = Some(stripped.to_string());
-        } else if let Some(stripped) = part.strip_prefix("ou=") {
+        let part_lower = part.to_lowercase();
+
+        if let Some(stripped) = part_lower.strip_prefix("cn=") {
+            // Extract the value from the original part to preserve case
+            let value = &part[part.len() - stripped.len()..];
+            username = Some(value.to_string());
+        } else if let Some(stripped) = part_lower.strip_prefix("ou=") {
             if organization.is_none() {
-                organization = Some(stripped.to_string());
+                // Extract the value from the original part to preserve case
+                let value = &part[part.len() - stripped.len()..];
+                organization = Some(value.to_string());
+            }
+        } else if let Some(stripped) = part_lower.strip_prefix("dc=") {
+            if first_dc.is_none() {
+                // Extract the value from the original part to preserve case
+                let value = &part[part.len() - stripped.len()..];
+                first_dc = Some(value.to_string());
             }
         }
     }
 
-    match (username, organization) {
+    match (username, organization.or(first_dc)) {
         (Some(u), Some(o)) => Some((o, u)),
         _ => None,
     }
@@ -814,31 +833,48 @@ fn parse_extended_request_oid(payload: &[u8]) -> std::result::Result<String, Str
 }
 
 fn create_bind_response(message_id: u32, result_code: u8) -> Vec<u8> {
-    // Simplified LDAP Bind Response
-    // Real implementation should use proper BER encoding
+    let mut response = Vec::new();
 
-    let response = vec![
-        // SEQUENCE
-        0x30,
-        0x0c, // length placeholder
-        // Message ID
-        0x02,
-        0x01,
-        message_id as u8,
-        // Bind Response
-        0x61, // APPLICATION 1
-        0x07,
-        // Result code
-        0x0a, // ENUMERATED
-        0x01,
-        result_code,
-        // Matched DN (empty)
-        0x04,
-        0x00,
-        // Diagnostic message (empty)
-        0x04,
-        0x00,
-    ];
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
+    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (bind response fields)
+
+    // SEQUENCE
+    response.push(0x30);
+    response.push(total_len as u8);
+
+    // Message ID
+    response.push(0x02);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
+
+    // Bind Response
+    response.push(0x61); // APPLICATION 1
+    response.push(0x07);
+
+    // Result code
+    response.push(0x0a); // ENUMERATED
+    response.push(0x01);
+    response.push(result_code);
+
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
 
     response
 }
@@ -889,7 +925,28 @@ fn create_search_entry_response(
     }
 
     let dn_bytes = dn.as_bytes();
-    let total_len = 7 + dn_bytes.len() + attrs.len();
+
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
+    // Calculate entry_len (DN + Attributes)
+    let entry_len = 2 + dn_bytes.len() + 2 + attrs.len();
+
+    // Calculate total_len (entire message content)
+    // Message ID: tag(1) + len(1) + bytes
+    // Search Result Entry: tag(1) + len_bytes + entry content
+    let entry_len_bytes = if entry_len < 128 { 1 } else { 2 };
+    let total_len = 2 + message_id_bytes.len() + 1 + entry_len_bytes + entry_len;
 
     // SEQUENCE
     response.push(0x30);
@@ -902,12 +959,11 @@ fn create_search_entry_response(
 
     // Message ID
     response.push(0x02);
-    response.push(0x01);
-    response.push(message_id as u8);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
 
     // Search Result Entry
     response.push(0x64); // APPLICATION 4
-    let entry_len = dn_bytes.len() + attrs.len() + 4;
     if entry_len < 128 {
         response.push(entry_len as u8);
     } else {
@@ -934,39 +990,67 @@ fn create_search_entry_response(
 }
 
 fn create_search_done_response(message_id: u32, result_code: u8) -> Vec<u8> {
-    let response = vec![
-        // SEQUENCE
-        0x30,
-        0x0c,
-        // Message ID
-        0x02,
-        0x01,
-        message_id as u8,
-        // Search Result Done
-        0x65, // APPLICATION 5
-        0x07,
-        // Result code
-        0x0a,
-        0x01,
-        result_code,
-        // Matched DN (empty)
-        0x04,
-        0x00,
-        // Diagnostic message (empty)
-        0x04,
-        0x00,
-    ];
+    let mut response = Vec::new();
+
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
+    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (result fields)
+
+    // SEQUENCE
+    response.push(0x30);
+    response.push(total_len as u8);
+
+    // Message ID
+    response.push(0x02);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
+
+    // Search Result Done
+    response.push(0x65); // APPLICATION 5
+    response.push(0x07);
+
+    // Result code
+    response.push(0x0a);
+    response.push(0x01);
+    response.push(result_code);
+
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
 
     response
 }
 
 fn create_whoami_response(message_id: u32, dn: &str) -> Vec<u8> {
-    let dn_bytes = format!("dn:{}", dn).into_bytes();
+    let dn_bytes = if dn.is_empty() {
+        Vec::new() // RFC 4532: empty authzId for anonymous
+    } else {
+        format!("dn:{}", dn).into_bytes()
+    };
     create_extended_response(
         message_id,
         LdapResultCode::Success as u8,
         Some("1.3.6.1.4.1.4203.1.11.3"), // WhoAmI OID
-        Some(&dn_bytes),
+        if dn_bytes.is_empty() {
+            None
+        } else {
+            Some(&dn_bytes)
+        },
     )
 }
 
@@ -978,6 +1062,19 @@ fn create_extended_response(
 ) -> Vec<u8> {
     let mut response = Vec::new();
 
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
     // Calculate response name and value lengths
     let response_name_len = response_name.map(|n| n.len() + 2).unwrap_or(0);
     let response_value_len = response_value.map(|v| v.len() + 2).unwrap_or(0);
@@ -985,7 +1082,11 @@ fn create_extended_response(
 
     // SEQUENCE
     response.push(0x30);
-    let total_len = 4 + ext_response_len; // 4 = messageID(3) + extendedResp tag(1)
+    let total_len = 2
+        + message_id_bytes.len()
+        + 1
+        + if ext_response_len < 128 { 1 } else { 2 }
+        + ext_response_len;
     if total_len < 128 {
         response.push(total_len as u8);
     } else {
@@ -995,8 +1096,8 @@ fn create_extended_response(
 
     // Message ID
     response.push(0x02);
-    response.push(0x01);
-    response.push(message_id as u8);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
 
     // Extended Response (APPLICATION 24)
     response.push(0x78);
@@ -1039,28 +1140,48 @@ fn create_extended_response(
 }
 
 fn create_error_response(message_id: u32, op_type: u8, result_code: u8) -> Vec<u8> {
-    let response = vec![
-        // SEQUENCE
-        0x30,
-        0x0c,
-        // Message ID
-        0x02,
-        0x01,
-        message_id as u8,
-        // Response with op_type
-        0x60 | op_type,
-        0x07,
-        // Result code
-        0x0a,
-        0x01,
-        result_code,
-        // Matched DN (empty)
-        0x04,
-        0x00,
-        // Diagnostic message (empty)
-        0x04,
-        0x00,
-    ];
+    let mut response = Vec::new();
+
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
+    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (error response fields)
+
+    // SEQUENCE
+    response.push(0x30);
+    response.push(total_len as u8);
+
+    // Message ID
+    response.push(0x02);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
+
+    // Response with op_type
+    response.push(0x60 | op_type);
+    response.push(0x07);
+
+    // Result code
+    response.push(0x0a);
+    response.push(0x01);
+    response.push(result_code);
+
+    // Matched DN (empty)
+    response.push(0x04);
+    response.push(0x00);
+
+    // Diagnostic message (empty)
+    response.push(0x04);
+    response.push(0x00);
 
     response
 }
@@ -1110,14 +1231,38 @@ mod tests {
         let (org, username) = result.unwrap();
         assert_eq!(org, "acme");
         assert_eq!(username, "john");
+
+        // Test uppercase prefixes
+        let dn_upper = "CN=john,OU=acme,DC=example,DC=com";
+        let result_upper = parse_dn(dn_upper);
+        assert!(result_upper.is_some());
+
+        let (org_upper, username_upper) = result_upper.unwrap();
+        assert_eq!(org_upper, "acme");
+        assert_eq!(username_upper, "john");
+
+        // Test mixed case
+        let dn_mixed = "Cn=jane,Ou=widgets,dc=example,dc=com";
+        let result_mixed = parse_dn(dn_mixed);
+        assert!(result_mixed.is_some());
+
+        let (org_mixed, username_mixed) = result_mixed.unwrap();
+        assert_eq!(org_mixed, "widgets");
+        assert_eq!(username_mixed, "jane");
+
+        // Test DN without OU (uses first DC as organization)
+        let dn_no_ou = "cn=falkordb,DC=falkordb,DC=cloud";
+        let result_no_ou = parse_dn(dn_no_ou);
+        assert!(result_no_ou.is_some());
+
+        let (org_no_ou, username_no_ou) = result_no_ou.unwrap();
+        assert_eq!(org_no_ou, "falkordb");
+        assert_eq!(username_no_ou, "falkordb");
     }
 
     #[test]
     fn test_parse_dn_invalid() {
-        // Missing organization
-        assert!(parse_dn("cn=john,dc=example,dc=com").is_none());
-
-        // Missing username
+        // Missing username (no cn)
         assert!(parse_dn("ou=acme,dc=example,dc=com").is_none());
 
         // Too short
@@ -1538,11 +1683,11 @@ mod tests {
         let response = handle_extended_request(1, &full_payload, &auth_user, &auth_org).await;
 
         assert!(!response.is_empty());
-        // Per RFC 4532: Anonymous should return success with empty authorization identity
+        // Per RFC 4532: Anonymous should return success with empty authorization identity (no response value)
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 0); // Success
-                                                  // Response should contain "dn:" with empty value
+                                                  // Response should NOT contain "dn:" for anonymous - response value should be absent
         let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("dn:"));
+        assert!(!response_str.contains("dn:"));
     }
 }
