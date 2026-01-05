@@ -1432,9 +1432,9 @@ mod tests {
             handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
         assert!(!response.is_empty());
-        // Should return error response for insufficient access rights
+        // Per RFC 4532: Anonymous search should return empty results (success), not error
         let result_code_pos = 9;
-        assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+        assert_eq!(response[result_code_pos], 0); // Success with empty results
     }
 
     #[tokio::test]
@@ -1498,16 +1498,23 @@ mod tests {
         let auth_user = Some("john".to_string());
         let auth_org = Some("acme".to_string());
 
-        let payload = vec![]; // Simplified
+        // Proper WhoAmI extended request payload with OID 1.3.6.1.4.1.4203.1.11.3
+        let whoami_oid = b"1.3.6.1.4.1.4203.1.11.3";
+        let payload = vec![
+            0x77, (whoami_oid.len() + 2) as u8, // Extended request tag and length
+            0x80, whoami_oid.len() as u8,        // OID tag (CONTEXT 0) and length
+        ];
+        let mut full_payload = payload;
+        full_payload.extend_from_slice(whoami_oid);
 
-        let response = handle_extended_request(1, &payload, &auth_user, &auth_org).await;
+        let response = handle_extended_request(1, &full_payload, &auth_user, &auth_org).await;
 
         assert!(!response.is_empty());
         assert_eq!(response[5], 0x78); // Extended Response tag
 
-        // Should contain the DN
+        // Should contain the DN in the response value
         let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("dn:"));
+        assert!(response_str.contains("dn:cn=john,ou=acme"));
     }
 
     #[tokio::test]
@@ -1515,13 +1522,23 @@ mod tests {
         let auth_user = None;
         let auth_org = None;
 
-        let payload = vec![];
+        // Proper WhoAmI extended request payload with OID 1.3.6.1.4.1.4203.1.11.3
+        let whoami_oid = b"1.3.6.1.4.1.4203.1.11.3";
+        let payload = vec![
+            0x77, (whoami_oid.len() + 2) as u8, // Extended request tag and length
+            0x80, whoami_oid.len() as u8,        // OID tag (CONTEXT 0) and length
+        ];
+        let mut full_payload = payload;
+        full_payload.extend_from_slice(whoami_oid);
 
-        let response = handle_extended_request(1, &payload, &auth_user, &auth_org).await;
+        let response = handle_extended_request(1, &full_payload, &auth_user, &auth_org).await;
 
         assert!(!response.is_empty());
-        // Should return insufficient access rights
+        // Per RFC 4532: Anonymous should return success with empty authorization identity
         let result_code_pos = 9;
-        assert_eq!(response[result_code_pos], 50);
+        assert_eq!(response[result_code_pos], 0); // Success
+        // Response should contain "dn:" with empty value
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("dn:"));
     }
 }
