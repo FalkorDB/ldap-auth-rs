@@ -7,21 +7,28 @@
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `API_BEARER_TOKEN` | Bearer token for API authentication | `your-secure-token-here` |
-| `REDIS_URL` | Redis connection URL | `redis://127.0.0.1:6379` |
+
+### Redis Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_HOST` | `127.0.0.1` | Redis server hostname or IP |
+| `REDIS_PORT` | `6379` | Redis server port |
+| `REDIS_USERNAME` | - | Redis username (optional, for ACL) |
+| `REDIS_PASSWORD` | - | Redis password (optional) |
 
 ### Optional Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `API_HOST` | `0.0.0.0` | API server bind address |
 | `API_PORT` | `8080` | API server port |
-| `LDAP_HOST` | `0.0.0.0` | LDAP server bind address |
-| `LDAP_PORT` | `3893` | LDAP server port |
+| `LDAP_PORT` | `3389` | LDAP server port |
 | `LDAP_BASE_DN` | `dc=example,dc=com` | LDAP base DN |
 | `LDAP_SEARCH_BIND_ORG` | - | Organization authorized to perform LDAP searches (see LDAP Search Authorization) |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
-| `TLS_CERT_PATH` | - | Path to TLS certificate (enables TLS) |
-| `TLS_KEY_PATH` | - | Path to TLS private key (enables TLS) |
+| `ENABLE_TLS` | `false` | Enable TLS for both API and LDAP servers |
+| `TLS_CERT_PATH` | - | Path to TLS certificate file (required when `ENABLE_TLS=true`) |
+| `TLS_KEY_PATH` | - | Path to TLS private key file (required when `ENABLE_TLS=true`) |
 
 ## Configuration Methods
 
@@ -29,7 +36,8 @@
 
 ```bash
 export API_BEARER_TOKEN="my-secure-token"
-export REDIS_URL="redis://127.0.0.1:6379"
+export REDIS_HOST="127.0.0.1"
+export REDIS_PORT="6379"
 export API_PORT="8080"
 export RUST_LOG="debug"
 ```
@@ -40,9 +48,10 @@ Create a `.env` file in the project root:
 
 ```env
 API_BEARER_TOKEN=my-secure-token
-REDIS_URL=redis://127.0.0.1:6379
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
 API_PORT=8080
-LDAP_PORT=3893
+LDAP_PORT=3389
 RUST_LOG=info
 ```
 
@@ -51,7 +60,8 @@ RUST_LOG=info
 ```bash
 docker run -d \
   -e API_BEARER_TOKEN=my-token \
-  -e REDIS_URL=redis://redis:6379 \
+  -e REDIS_HOST=redis \
+  -e REDIS_PORT=6379 \
   -e RUST_LOG=info \
   -p 8080:8080 \
   ldap-auth-rs:latest
@@ -65,7 +75,8 @@ services:
     image: ldap-auth-rs:latest
     environment:
       API_BEARER_TOKEN: my-secure-token
-      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       API_PORT: 8080
       RUST_LOG: info
 ```
@@ -86,7 +97,8 @@ kind: ConfigMap
 metadata:
   name: ldap-auth-config
 data:
-  REDIS_URL: redis://redis:6379
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
   API_PORT: "8080"
   RUST_LOG: info
 ```
@@ -118,25 +130,105 @@ openssl rand -base64 32
 
 ### Redis Security
 
-- Use Redis authentication: `redis://:password@host:port`
-- Enable Redis TLS: `rediss://host:port` (note the 's')
+The application constructs the Redis connection URL internally from the individual components:
+
+```
+redis://[username:password@]host:port
+```
+
+Examples:
+```bash
+# Basic connection (no auth)
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+
+# With password authentication
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+REDIS_PASSWORD=my-secure-password
+# Results in: redis://:my-secure-password@redis.example.com:6379
+
+# With username and password (Redis ACL)
+REDIS_HOST=redis.example.com
+REDIS_PORT=6379
+REDIS_USERNAME=myuser
+REDIS_PASSWORD=my-secure-password
+# Results in: redis://myuser:my-secure-password@redis.example.com:6379
+```
+
+**Security best practices:**
+- Use Redis authentication with strong passwords
 - Use Redis ACLs for fine-grained access control
 - Run Redis in a private network
+- For TLS connections, see your Redis client library documentation
 
 ### TLS Configuration
 
-For production, always enable TLS:
+#### Development (Self-Signed Certificates)
+
+For development and testing:
 
 ```bash
-# Generate self-signed certificate (dev only)
-openssl req -x509 -newkey rsa:4096 \
-  -keyout key.pem -out cert.pem \
-  -days 365 -nodes \
-  -subj "/CN=localhost"
+# Generate self-signed certificate
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout server.key -out server.crt \
+  -days 365 -subj "/CN=localhost"
 
-# Use in production with real certificates
-export TLS_CERT_PATH=/etc/ssl/certs/server.crt
-export TLS_KEY_PATH=/etc/ssl/private/server.key
+# Configure application
+export ENABLE_TLS=true
+export TLS_CERT_PATH=./server.crt
+export TLS_KEY_PATH=./server.key
+```
+
+#### Production (Real Certificates)
+
+Use certificates from a trusted CA (Let's Encrypt, DigiCert, etc.):
+
+```bash
+# Configure with real certificates
+export ENABLE_TLS=true
+export TLS_CERT_PATH=/etc/ssl/certs/ldap-auth.crt
+export TLS_KEY_PATH=/etc/ssl/private/ldap-auth.key
+```
+
+#### Kubernetes with cert-manager
+
+For Kubernetes deployments, TLS is automatically configured using cert-manager:
+
+```bash
+# TLS is enabled by default in k8s/base/configmap.yaml
+ENABLE_TLS: "true"
+TLS_CERT_PATH: "/etc/tls/tls.crt"
+TLS_KEY_PATH: "/etc/tls/tls.key"
+
+# Certificate is auto-generated and mounted via k8s/base/certificate.yaml
+# No manual configuration needed
+```
+
+See [k8s/README.md](../k8s/README.md#-tls-configuration) for Kubernetes TLS options.
+
+#### TLS Requirements
+
+When `ENABLE_TLS=true`:
+- Both `TLS_CERT_PATH` and `TLS_KEY_PATH` must be set
+- Certificate and key files must exist and be readable
+- Certificate must be in PEM format
+- Private key must be in PKCS#1 or PKCS#8 PEM format
+- Application will fail to start if TLS configuration is invalid
+
+#### TLS Applies To
+
+When TLS is enabled, it secures both:
+- **API Server** (HTTP): Serves on HTTPS instead of HTTP
+- **LDAP Server**: Serves LDAPS (LDAP over TLS)
+
+Example client connections with TLS:
+```bash
+# API with TLS
+curl -H "Authorization: Bearer $TOKEN" https://localhost:8080/api/users
+
+# LDAP with TLS
+ldapsearch -H ldaps://localhost:3389 -D "uid=admin,ou=people,dc=example,dc=com" -W
 ```
 
 ## Logging Configuration
@@ -232,9 +324,10 @@ scrape_configs:
 
 ```env
 API_BEARER_TOKEN=dev-token-123
-REDIS_URL=redis://127.0.0.1:6379
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
 API_PORT=8080
-LDAP_PORT=3893
+LDAP_PORT=3389
 RUST_LOG=debug
 ```
 
@@ -242,11 +335,13 @@ RUST_LOG=debug
 
 ```env
 API_BEARER_TOKEN=<from-secrets-manager>
-REDIS_URL=redis://:password@redis-staging:6379
-API_HOST=0.0.0.0
+REDIS_HOST=redis-staging
+REDIS_PORT=6379
+REDIS_PASSWORD=<from-secrets-manager>
 API_PORT=8080
-LDAP_PORT=3893
+LDAP_PORT=3389
 RUST_LOG=info
+ENABLE_TLS=true
 TLS_CERT_PATH=/etc/ssl/certs/staging.crt
 TLS_KEY_PATH=/etc/ssl/private/staging.key
 ```
@@ -255,11 +350,13 @@ TLS_KEY_PATH=/etc/ssl/private/staging.key
 
 ```env
 API_BEARER_TOKEN=<from-secrets-manager>
-REDIS_URL=rediss://:password@redis-prod:6380
-API_HOST=0.0.0.0
+REDIS_HOST=redis-prod
+REDIS_PORT=6380
+REDIS_PASSWORD=<from-secrets-manager>
 API_PORT=8080
 LDAP_PORT=636
 RUST_LOG=warn
+ENABLE_TLS=true
 TLS_CERT_PATH=/etc/ssl/certs/prod.crt
 TLS_KEY_PATH=/etc/ssl/private/prod.key
 ```

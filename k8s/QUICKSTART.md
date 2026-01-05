@@ -50,7 +50,7 @@ kubectl get secret ldap-auth-secrets -n ldap-auth-prod -o yaml
 
 # Decode specific field
 kubectl get secret ldap-auth-secrets -n ldap-auth-prod \
-  -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d && echo
+  -o jsonpath='{.data.API_BEARER_TOKEN}' | base64 -d && echo
 ```
 
 ### Rotate Secrets

@@ -16,7 +16,8 @@ docker run -d \
   -p 8080:8080 \
   -p 3893:3893 \
   -e API_BEARER_TOKEN="your-secure-token" \
-  -e REDIS_URL="redis://redis-host:6379" \
+  -e REDIS_HOST="redis-host" \
+  -e REDIS_PORT="6379" \
   -e RUST_LOG="info" \
   --restart unless-stopped \
   ldap-auth-rs:latest
@@ -44,7 +45,8 @@ services:
       - "3893:3893"
     environment:
       API_BEARER_TOKEN: ${API_BEARER_TOKEN}
-      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
       RUST_LOG: info
     depends_on:
       - redis
@@ -89,7 +91,8 @@ metadata:
   name: ldap-auth-config
   namespace: ldap-auth
 data:
-  REDIS_URL: "redis://redis-service:6379"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
   RUST_LOG: "info"
 ---
 apiVersion: apps/v1
@@ -121,11 +124,11 @@ spec:
             secretKeyRef:
               name: ldap-auth-secrets
               key: API_BEARER_TOKEN
-        - name: REDIS_URL
+        - name: REDIS_HOST
           valueFrom:
             configMapKeyRef:
               name: ldap-auth-config
-              key: REDIS_URL
+              key: REDIS_HOST
         - name: RUST_LOG
           valueFrom:
             configMapKeyRef:
@@ -341,7 +344,8 @@ User=ldap-auth
 Group=ldap-auth
 WorkingDirectory=/opt/ldap-auth-rs
 Environment="API_BEARER_TOKEN=your-token"
-Environment="REDIS_URL=redis://127.0.0.1:6379"
+Environment="REDIS_HOST=127.0.0.1"
+Environment="REDIS_PORT=6379"
 Environment="RUST_LOG=info"
 ExecStart=/opt/ldap-auth-rs/ldap-auth-rs
 Restart=on-failure
@@ -459,9 +463,13 @@ services:
       - redis-replica
 ```
 
-Update connection string:
+Update connection configuration:
 ```bash
-REDIS_URL="redis-sentinel://sentinel1,sentinel2,sentinel3/mymaster"
+# Note: Redis Sentinel is not currently supported
+# Use single instance or external managed Redis
+REDIS_HOST=redis-master
+REDIS_PORT=6379
+REDIS_PASSWORD=your-password
 ```
 
 ### Load Balancing
@@ -562,21 +570,60 @@ spec:
 
 ### TLS/SSL
 
-Always use TLS in production:
+#### Self-Signed Certificates (Development/Testing)
+
+For development, generate self-signed certificates:
 
 ```bash
+# Generate self-signed certificate
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout server.key \
+  -out server.crt \
+  -days 365 \
+  -subj "/CN=localhost"
+
 # Mount certificates in Docker
 docker run -d \
-  -v /etc/ssl/certs:/certs:ro \
+  -v $(pwd)/server.crt:/certs/server.crt:ro \
+  -v $(pwd)/server.key:/certs/server.key:ro \
+  -e ENABLE_TLS=true \
   -e TLS_CERT_PATH=/certs/server.crt \
   -e TLS_KEY_PATH=/certs/server.key \
   ldap-auth-rs:latest
+```
 
-# Kubernetes secret
+#### Kubernetes with cert-manager (Recommended)
+
+For production Kubernetes deployments, use cert-manager for automated certificate management:
+
+```bash
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+# Deploy with TLS (included in base kustomization)
+kubectl apply -k k8s/overlays/production
+```
+
+The deployment includes:
+- **Issuer**: Self-signed certificate issuer (can be replaced with Let's Encrypt or custom CA)
+- **Certificate**: Automatically generated and renewed every 90 days
+- **Secret**: TLS certificate stored as `ldap-auth-tls` secret
+- **Volume Mount**: Certificate automatically mounted at `/etc/tls/` in pods
+
+See [k8s/README.md](../k8s/README.md#-tls-configuration) for detailed TLS configuration options.
+
+#### Manual Kubernetes Secret
+
+If cert-manager is not available:
+
+```bash
+# Create TLS secret manually
 kubectl create secret tls ldap-auth-tls \
   --cert=server.crt \
   --key=server.key \
   -n ldap-auth
+
+# Mount in deployment (already configured in base/deployment.yaml)
 ```
 
 ## Backup & Recovery
@@ -634,7 +681,7 @@ curl http://localhost:8080/health
 ### Common Issues
 
 1. **Redis connection failed**
-   - Check `REDIS_URL` configuration
+   - Check `REDIS_HOST` and `REDIS_PORT` configuration
    - Verify Redis is running
    - Check network connectivity
 

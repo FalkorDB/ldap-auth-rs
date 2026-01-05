@@ -11,6 +11,8 @@ k8s/
 │   ├── namespace.yaml             # Namespace definition
 │   ├── configmap.yaml             # Application configuration
 │   ├── secret.yaml                # Secrets (passwords, tokens)
+│   ├── issuer.yaml                # cert-manager self-signed issuer
+│   ├── certificate.yaml           # TLS certificate definition
 │   ├── deployment.yaml            # Application deployment
 │   ├── service.yaml               # Service definitions
 │   ├── hpa.yaml                   # Horizontal Pod Autoscaler
@@ -48,6 +50,19 @@ k8s/
 - Kubernetes cluster (v1.24+)
 - kubectl CLI tool
 - kustomize (v5.0+) or kubectl with built-in kustomize
+- [cert-manager](https://cert-manager.io/) (v1.0+) for TLS certificate management
+
+### Install cert-manager
+
+If not already installed:
+
+```bash
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
+
+# Verify installation
+kubectl get pods -n cert-manager
+```
 
 ### Deploy to Development
 
@@ -89,16 +104,13 @@ kubectl rollout status deployment/prod-ldap-auth-rs -n ldap-auth-prod
 **IMPORTANT**: Replace default passwords before deploying to production!
 
 ```bash
-# Generate secure passwords
-export ADMIN_PASSWORD=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 64)
+# Generate secure secrets
+export API_BEARER_TOKEN=$(openssl rand -base64 64)
 export REDIS_PASSWORD=$(openssl rand -base64 32)
 
 # Create secret manually
 kubectl create secret generic ldap-auth-secrets \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD=$ADMIN_PASSWORD \
-  --from-literal=JWT_SECRET=$JWT_SECRET \
+  --from-literal=API_BEARER_TOKEN=$API_BEARER_TOKEN \
   --from-literal=REDIS_PASSWORD=$REDIS_PASSWORD \
   -n ldap-auth-prod \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -295,7 +307,132 @@ Minimal RBAC permissions are configured:
 - ServiceAccount with limited access
 - Role for ConfigMap/Secret read access only
 
-## 🔄 Scaling
+## � TLS Configuration
+
+The deployment includes automated TLS certificate management using cert-manager with self-signed certificates. For production environments, you can switch to Let's Encrypt or your own CA.
+
+### Self-Signed Certificates (Default)
+
+Self-signed certificates are automatically generated and renewed by cert-manager:
+
+```bash
+# Verify cert-manager is running
+kubectl get pods -n cert-manager
+
+# Check issuer status
+kubectl get issuer -n ldap-auth
+kubectl describe issuer ldap-auth-selfsigned-issuer -n ldap-auth
+
+# Check certificate status
+kubectl get certificate -n ldap-auth
+kubectl describe certificate ldap-auth-tls-cert -n ldap-auth
+
+# Verify secret was created
+kubectl get secret ldap-auth-tls -n ldap-auth
+```
+
+**Certificate Details:**
+- **Duration**: 90 days
+- **Renewal**: 15 days before expiry (automatic)
+- **Algorithm**: RSA 2048-bit
+- **Usage**: Server auth + Client auth
+- **DNS Names**: 
+  - `ldap-auth-service`
+  - `ldap-auth-service.ldap-auth`
+  - `ldap-auth-service.ldap-auth.svc`
+  - `ldap-auth-service.ldap-auth.svc.cluster.local`
+
+### Using Let's Encrypt (Production)
+
+For production with public domains, use Let's Encrypt:
+
+```yaml
+# Edit k8s/base/issuer.yaml
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ldap-auth-letsencrypt-issuer
+  namespace: ldap-auth
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: your-email@example.com
+    privateKeySecretRef:
+      name: letsencrypt-private-key
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+```
+
+Then update `certificate.yaml` to reference the new issuer:
+
+```yaml
+issuerRef:
+  name: ldap-auth-letsencrypt-issuer
+  kind: Issuer
+  group: cert-manager.io
+```
+
+### Using Custom CA
+
+For enterprise environments with internal CA:
+
+```bash
+# Create CA secret
+kubectl create secret tls ca-key-pair \
+  --cert=ca.crt \
+  --key=ca.key \
+  -n ldap-auth
+
+# Update issuer
+cat <<EOF | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ldap-auth-ca-issuer
+  namespace: ldap-auth
+spec:
+  ca:
+    secretName: ca-key-pair
+EOF
+```
+
+### Disabling TLS
+
+To disable TLS (not recommended for production):
+
+```bash
+# Edit k8s/base/configmap.yaml
+# Set ENABLE_TLS: "false"
+
+# Remove TLS volume mount from k8s/base/deployment.yaml
+# Remove issuer.yaml and certificate.yaml from k8s/base/kustomization.yaml
+```
+
+### Troubleshooting TLS
+
+```bash
+# Check certificate is ready
+kubectl get certificate ldap-auth-tls-cert -n ldap-auth
+# Should show READY=True
+
+# View certificate details
+kubectl describe certificate ldap-auth-tls-cert -n ldap-auth
+
+# Check cert-manager logs
+kubectl logs -n cert-manager deployment/cert-manager
+
+# Verify TLS secret contents
+kubectl get secret ldap-auth-tls -n ldap-auth -o yaml
+
+# Test TLS connection
+kubectl run -it --rm debug --image=alpine --restart=Never -- sh
+apk add openssl
+openssl s_client -connect ldap-auth-service.ldap-auth:8080 -showcerts
+```
+
+## �🔄 Scaling
 
 ### Manual Scaling
 
@@ -351,12 +488,13 @@ cd k8s/overlays/production
 kustomize edit remove resource ../../base/redis-deployment.yaml
 kustomize edit remove resource ../../base/redis-service.yaml
 
-# Update ConfigMap with external Redis URL
+# Update ConfigMap with external Redis connection
 configMapGenerator:
 - name: ldap-auth-config
   behavior: merge
   literals:
-  - REDIS_URL=redis://your-redis-host.example.com:6379
+  - REDIS_HOST=your-redis-host.example.com
+  - REDIS_PORT=6379
 ```
 
 ### Option 3: Redis Cluster

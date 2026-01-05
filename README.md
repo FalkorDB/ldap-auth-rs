@@ -52,7 +52,8 @@ docker run -d -p 6379:6379 redis:7-alpine
 
 # 2. Set environment variables
 export API_BEARER_TOKEN="your-secure-token"
-export REDIS_URL="redis://127.0.0.1:6379"
+export REDIS_HOST="127.0.0.1"
+export REDIS_PORT="6379"
 
 # 3. Run the service
 cargo run --release
@@ -158,7 +159,8 @@ Production readiness score: **10/10** ✅
 ```bash
 # Required
 API_BEARER_TOKEN=your-secure-bearer-token
-REDIS_URL=redis://127.0.0.1:6379
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
 
 # Optional (with defaults)
 API_HOST=0.0.0.0
@@ -266,7 +268,8 @@ docker run -d \
   -p 8080:8080 \
   -p 3893:3893 \
   -e API_BEARER_TOKEN=your-token \
-  -e REDIS_URL=redis://redis:6379 \
+  -e REDIS_HOST=redis \
+  -e REDIS_PORT=6379 \
   --name ldap-auth \
   ldap-auth-rs:latest
 ```

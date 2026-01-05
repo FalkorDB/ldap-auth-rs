@@ -5,17 +5,24 @@ metadata:
   labels:
     app.kubernetes.io/component: config
 data:
-  # Application configuration
-  LOG_LEVEL: "info"
+  # Logging
   RUST_LOG: "ldap_auth_rs=info"
-  SERVER_HOST: "0.0.0.0"
-  SERVER_PORT: "8080"
-  
-  # Cache configuration
-  CACHE_TTL: "300"
-  CACHE_MAX_SIZE: "10000"
   
   # Redis configuration
-  REDIS_URL: "redis://redis-service:6379"
-  REDIS_POOL_SIZE: "10"
-  REDIS_TIMEOUT: "5"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  # REDIS_USERNAME: ""  # Optional - uncomment if needed
+  # Note: REDIS_PASSWORD is set in secret, not configmap
+  
+  # API Server
+  API_PORT: "8080"
+  
+  # LDAP Server
+  LDAP_PORT: "3389"
+  LDAP_BASE_DN: "dc=example,dc=com"
+  # LDAP_SEARCH_BIND_ORG: ""  # Optional - uncomment if needed
+  
+  # TLS configuration
+  ENABLE_TLS: "true"
+  TLS_CERT_PATH: "/etc/tls/tls.crt"
+  TLS_KEY_PATH: "/etc/tls/tls.key"

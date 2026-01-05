@@ -118,12 +118,19 @@ spec:
           mountPath: /tmp
         - name: cache
           mountPath: /app/cache
+        - name: tls-certs
+          mountPath: /etc/tls
+          readOnly: true
       
       volumes:
       - name: tmp
         emptyDir: {}
       - name: cache
         emptyDir: {}
+      - name: tls-certs
+        secret:
+          secretName: ldap-auth-tls
+          defaultMode: 0440
       
       topologySpreadConstraints:
       - maxSkew: 1

@@ -1,0 +1,30 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ldap-auth-tls-cert
+  namespace: ldap-auth
+spec:
+  secretName: ldap-auth-tls
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days before expiry
+  subject:
+    organizations:
+      - FalkorDB
+  commonName: ldap-auth-service.ldap-auth.svc.cluster.local
+  isCA: false
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    - ldap-auth-service
+    - ldap-auth-service.ldap-auth
+    - ldap-auth-service.ldap-auth.svc
+    - ldap-auth-service.ldap-auth.svc.cluster.local
+  issuerRef:
+    name: ldap-auth-selfsigned-issuer
+    kind: Issuer
+    group: cert-manager.io

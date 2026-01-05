@@ -25,10 +25,7 @@ metadata:
   name: ldap-auth-secrets
 spec:
   fields:
-  - fieldName: ADMIN_PASSWORD
-    length: "32"
-    encoding: base64
-  - fieldName: JWT_SECRET
+  - fieldName: API_BEARER_TOKEN
     length: "64"
     encoding: base64
   - fieldName: REDIS_PASSWORD
@@ -47,16 +44,13 @@ spec:
 If you cannot use StringSecret, uncomment the fallback in [base/secret.yaml](base/secret.yaml):
 
 ```bash
-# Generate secure passwords manually
-export ADMIN_PASSWORD=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 64)
+# Generate secure secrets manually
+export API_BEARER_TOKEN=$(openssl rand -base64 64)
 export REDIS_PASSWORD=$(openssl rand -base64 32)
 
 # Create secret
 kubectl create secret generic ldap-auth-secrets \
-  --from-literal=ADMIN_USERNAME=admin \
-  --from-literal=ADMIN_PASSWORD=$ADMIN_PASSWORD \
-  --from-literal=JWT_SECRET=$JWT_SECRET \
+  --from-literal=API_BEARER_TOKEN=$API_BEARER_TOKEN \
   --from-literal=REDIS_PASSWORD=$REDIS_PASSWORD \
   -n ldap-auth-prod
 ```
@@ -69,7 +63,7 @@ kubectl get secret ldap-auth-secrets -n ldap-auth-prod -o yaml
 
 # Decode specific field
 kubectl get secret ldap-auth-secrets -n ldap-auth-prod \
-  -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d
+  -o jsonpath='{.data.API_BEARER_TOKEN}' | base64 -d
 ```
 
 ### Secret Rotation
