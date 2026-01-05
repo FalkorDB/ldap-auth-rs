@@ -47,6 +47,7 @@ jobs:
 
       - name: Install sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+        continue-on-error: true
 
       - name: Cache dependencies
         uses: actions/cache@v5
@@ -61,6 +62,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Configure sccache
+        continue-on-error: true
         run: |
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
@@ -88,7 +90,9 @@ jobs:
           CLI_CMD: cargo run --quiet --bin ldap-auth-cli --
 
       - name: Show sccache stats
-        run: sccache --show-stats
+        if: success() || failure()
+        continue-on-error: true
+        run: sccache --show-stats || echo "sccache not available"
 
   security:
     name: Security Audit

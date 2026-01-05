@@ -7,7 +7,7 @@ set -e
 echo "Running cargo clippy..."
 
 # Run clippy with strict warnings
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --all-features --no-deps -- -D warnings
 
 if [ $? -ne 0 ]; then
     echo ""
