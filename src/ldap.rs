@@ -569,33 +569,52 @@ async fn handle_search_request(
 ) -> Vec<u8> {
     debug!("Processing search request");
 
-    // Check if user is authenticated
+    // Per LDAP standards: if a search_bind_org is configured, only authenticated users
+    // from that organization can search. If not configured, anonymous searches are allowed
+    // but will return limited or no results (security by design).
+
+    // If search_bind_org is configured, require authentication from that specific org
+    if let Some(required_org) = search_bind_org {
+        match authenticated_org {
+            Some(org) if org == required_org => {
+                // Authenticated with correct org - proceed with search
+            }
+            Some(org) => {
+                warn!(
+                    "Search attempted by organization '{}' but only '{}' is authorized",
+                    org, required_org
+                );
+                return create_error_response(
+                    message_id,
+                    5,
+                    LdapResultCode::InsufficientAccessRights as u8,
+                );
+            }
+            None => {
+                warn!("Search attempted without authentication (authentication required)");
+                return create_error_response(
+                    message_id,
+                    5,
+                    LdapResultCode::InsufficientAccessRights as u8,
+                );
+            }
+        }
+    }
+
+    // If we reach here, either:
+    // 1. search_bind_org is configured and user is authenticated with correct org, OR
+    // 2. search_bind_org is NOT configured (anonymous search allowed)
+
     let org = match authenticated_org {
         Some(o) => o,
         None => {
-            warn!("Search attempted without authentication");
-            return create_error_response(
-                message_id,
-                5,
-                LdapResultCode::InsufficientAccessRights as u8,
-            );
+            // Anonymous search: return empty results (no organization to search)
+            debug!("Anonymous search - returning empty results");
+            let done_response =
+                create_search_done_response(message_id, LdapResultCode::Success as u8);
+            return done_response;
         }
     };
-
-    // Check if authenticated org matches the search bind org (if configured)
-    if let Some(required_org) = search_bind_org {
-        if org != required_org {
-            warn!(
-                "Search attempted by organization '{}' but only '{}' is authorized",
-                org, required_org
-            );
-            return create_error_response(
-                message_id,
-                5,
-                LdapResultCode::InsufficientAccessRights as u8,
-            );
-        }
-    }
 
     // In a full implementation, we would parse the search filter, base DN, scope, etc.
     // For now, we'll return all users in the organization as a simple search result
@@ -637,17 +656,15 @@ async fn handle_extended_request(
     debug!("Processing extended request");
 
     // Check if it's a WhoAmI request (OID: 1.3.6.1.4.1.4203.1.11.3)
-    // Simplified: just return the authenticated user info
+    // Per RFC 4532: return authorization identity for authenticated users,
+    // or empty string for anonymous/unauthenticated users (NOT an error)
 
     if let (Some(user), Some(org)) = (authenticated_user, authenticated_org) {
         let dn = format!("cn={},ou={}", user, org);
         create_whoami_response(message_id, &dn)
     } else {
-        create_error_response(
-            message_id,
-            24,
-            LdapResultCode::InsufficientAccessRights as u8,
-        )
+        // Anonymous/unauthenticated: return empty authorization identity
+        create_whoami_response(message_id, "")
     }
 }
 
