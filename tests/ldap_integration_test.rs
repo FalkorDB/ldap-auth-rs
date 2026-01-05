@@ -440,9 +440,18 @@ async fn test_ldap_search_unauthenticated() {
         .expect("Failed to read response");
     let response = &response[..n];
 
-    // Should get error response with insufficient access rights (50)
-    let result_code = parse_bind_response(response).unwrap_or(0);
-    assert_eq!(result_code, 50, "Should return insufficient access rights");
+    // Per RFC 4532: Anonymous search should return success with empty results
+    let result_code = parse_bind_response(response).unwrap_or(255);
+    assert_eq!(
+        result_code, 0,
+        "Should return success with empty results for anonymous search"
+    );
+
+    // Should contain search result done (0x65) but no entries
+    assert!(
+        response.contains(&0x65),
+        "Should contain search result done"
+    );
 }
 
 #[tokio::test]
