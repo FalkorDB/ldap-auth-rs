@@ -653,7 +653,8 @@ async fn handle_search_request(
     // Check if searching for groups a specific user is member of
     // In LDAP BER encoding, the filter might have the pattern differently
     // Try multiple patterns: "member=cn=", "member" followed by "cn="
-    let member_search = extract_member_username(&payload_str);
+    // Extract both username and organization from the member DN
+    let member_search = extract_member_info(&payload_str);
     debug!("Member search result: {:?}", member_search);
 
     // Per LDAP standards: if a search_bind_org is configured, only authenticated users
@@ -710,9 +711,12 @@ async fn handle_search_request(
         info!("Group search detected - querying groups from database");
 
         // If searching for groups a specific user is member of
-        if let Some(username) = member_search {
-            info!("Searching for groups where user '{}' is a member", username);
-            match db.get_user_groups(org, &username).await {
+        if let Some((member_org, username)) = member_search {
+            info!(
+                "Searching for groups where user '{}' is a member in org '{}'",
+                username, member_org
+            );
+            match db.get_user_groups(&member_org, &username).await {
                 Ok(groups) => {
                     for group in groups {
                         let dn = group.to_dn(base_dn);
@@ -789,15 +793,25 @@ async fn handle_search_request(
     responses
 }
 
-fn extract_member_username(payload_str: &str) -> Option<String> {
-    // Extract username from "member=cn=<username>,ou=..." pattern
+fn extract_member_info(payload_str: &str) -> Option<(String, String)> {
+    // Extract username and organization from "member=cn=<username>,ou=<org>,..." pattern
+    // Returns (organization, username)
     // Try different patterns as LDAP BER encoding might separate them
 
     // Pattern 1: Direct "member=cn=" (most common)
     if let Some(start) = payload_str.find("member=cn=") {
-        let after_cn = &payload_str[start + 10..]; // Skip "member=cn="
-        if let Some(end) = after_cn.find(',') {
-            return Some(after_cn[..end].to_string());
+        let after_member = &payload_str[start + 10..]; // Skip "member=cn="
+        if let Some(cn_end) = after_member.find(',') {
+            let username = after_member[..cn_end].to_string();
+            // Now look for ou= or dc= for organization
+            let after_username = &after_member[cn_end + 1..];
+            if let Some(org) = extract_org_from_dn(after_username) {
+                debug!(
+                    "Extracted from pattern 1: org='{}', username='{}'",
+                    org, username
+                );
+                return Some((org, username));
+            }
         }
     }
 
@@ -807,15 +821,48 @@ fn extract_member_username(payload_str: &str) -> Option<String> {
         let after_member = &payload_str[member_pos + 6..]; // Skip "member"
         if let Some(cn_pos) = after_member.find("cn=") {
             let after_cn = &after_member[cn_pos + 3..]; // Skip "cn="
-            if let Some(end) = after_cn.find(',') {
-                let username = after_cn[..end].to_string();
-                debug!("Extracted username from pattern 2: {}", username);
-                return Some(username);
+            if let Some(cn_end) = after_cn.find(',') {
+                let username = after_cn[..cn_end].to_string();
+                // Look for ou= or dc= for organization
+                let after_username = &after_cn[cn_end + 1..];
+                if let Some(org) = extract_org_from_dn(after_username) {
+                    debug!(
+                        "Extracted from pattern 2: org='{}', username='{}'",
+                        org, username
+                    );
+                    return Some((org, username));
+                }
             }
         }
     }
 
-    debug!("Failed to extract member username from payload");
+    debug!("Failed to extract member info from payload");
+    None
+}
+
+fn extract_org_from_dn(dn_part: &str) -> Option<String> {
+    // Extract organization from "ou=<org>,..." or "dc=<org>,..." pattern
+    // Prefer ou= over dc=
+    if let Some(ou_pos) = dn_part.find("ou=") {
+        let after_ou = &dn_part[ou_pos + 3..]; // Skip "ou="
+        if let Some(end) = after_ou.find(',') {
+            return Some(after_ou[..end].to_string());
+        } else {
+            // No comma, take rest of string
+            return Some(after_ou.to_string());
+        }
+    }
+
+    // Fall back to first dc= if no ou=
+    if let Some(dc_pos) = dn_part.find("dc=") {
+        let after_dc = &dn_part[dc_pos + 3..]; // Skip "dc="
+        if let Some(end) = after_dc.find(',') {
+            return Some(after_dc[..end].to_string());
+        } else {
+            return Some(after_dc.to_string());
+        }
+    }
+
     None
 }
 
@@ -1849,47 +1896,61 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_member_username_pattern1() {
-        // Pattern 1: Direct "member=cn=username,ou=..."
+    fn test_extract_member_info_pattern1() {
+        // Pattern 1: Direct "member=cn=username,ou=org,..."
         let payload =
             "(&(objectclass=groupofnames)(member=cn=testuser,ou=testorg,dc=example,dc=com))";
-        let result = extract_member_username(payload);
-        assert_eq!(result, Some("testuser".to_string()));
+        let result = extract_member_info(payload);
+        assert_eq!(
+            result,
+            Some(("testorg".to_string(), "testuser".to_string()))
+        );
     }
 
     #[test]
-    fn test_extract_member_username_pattern2() {
+    fn test_extract_member_info_pattern2() {
         // Pattern 2: "member" followed by "cn=" with separators (BER encoding)
         // Simulating BER-encoded payload where attribute and value are separated
         let payload = "(&(objectclass=groupofnames)(member\x00\x04cn=falkordb,ou=instance-1,dc=falkordb,dc=cloud))";
-        let result = extract_member_username(payload);
-        assert_eq!(result, Some("falkordb".to_string()));
+        let result = extract_member_info(payload);
+        assert_eq!(
+            result,
+            Some(("instance-1".to_string(), "falkordb".to_string()))
+        );
     }
 
     #[test]
-    fn test_extract_member_username_no_match() {
+    fn test_extract_member_info_no_match() {
         // No member filter present
         let payload = "(&(objectclass=groupofnames)(cn=testgroup))";
-        let result = extract_member_username(payload);
+        let result = extract_member_info(payload);
         assert_eq!(result, None);
     }
 
     #[test]
-    fn test_extract_member_username_different_case() {
+    fn test_extract_member_info_different_case() {
         // Test case sensitivity - in handle_search_request, payload is lowercased before extraction
         // So simulate what the function receives
         let payload = "(&(objectclass=groupofnames)(member=cn=username,ou=org,dc=example,dc=com))";
-        let result = extract_member_username(payload);
-        assert_eq!(result, Some("username".to_string()));
+        let result = extract_member_info(payload);
+        assert_eq!(result, Some(("org".to_string(), "username".to_string())));
     }
 
     #[test]
-    fn test_extract_member_username_no_comma() {
-        // Member filter without comma (invalid format)
+    fn test_extract_member_info_no_comma() {
+        // Member filter without comma after username (invalid format)
         let payload = "(&(objectclass=groupofnames)(member=cn=testuser))";
-        let result = extract_member_username(payload);
-        // Should still return None if no comma is found
+        let result = extract_member_info(payload);
+        // Should return None since there's no org info
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_member_info_dc_only() {
+        // Test with dc= only (no ou=) - should use first dc as org
+        let payload = "(&(objectclass=groupofnames)(member=cn=user,dc=example,dc=com))";
+        let result = extract_member_info(payload);
+        assert_eq!(result, Some(("example".to_string(), "user".to_string())));
     }
 
     #[tokio::test]
