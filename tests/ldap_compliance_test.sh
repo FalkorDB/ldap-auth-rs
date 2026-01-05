@@ -333,6 +333,24 @@ test_multiple_searches() {
     fi
 }
 
+# Test 16: Group Membership Query
+test_group_membership_query() {
+    print_test "Group Membership Query (groupOfNames)"
+    
+    local bind_dn="cn=${TEST_USER},ou=${TEST_ORG},${BASE_DN}"
+    
+    # Search for groups where the user is a member
+    # This should return empty results since groups are not supported (but should not timeout or error)
+    if ldapsearch -x -H "${LDAP_URL}" -D "${bind_dn}" -w "${TEST_PASSWORD}" \
+        -b "${BASE_DN}" -s sub \
+        "(&(objectClass=groupOfNames)(member=cn=${TEST_USER},ou=${TEST_ORG},dc=falkordb,dc=cloud))" \
+        description 2>&1 | grep -q "result: 0 Success"; then
+        print_pass "Group membership query returned successfully (empty results expected - groups not supported)"
+    else
+        print_fail "Group membership query failed or timed out"
+    fi
+}
+
 # Main test execution
 main() {
     echo -e "${YELLOW}================================${NC}"
@@ -364,6 +382,7 @@ main() {
     test_search_subtree
     test_large_message_ids
     test_multiple_searches
+    test_group_membership_query
     
     # Print summary
     print_summary

@@ -628,15 +628,145 @@ async fn handle_bind_request(
     }
 }
 
+fn extract_search_filter(payload: &[u8]) -> Option<String> {
+    // Search Request payload structure (after APPLICATION 3 tag):
+    // Base DN (OCTET STRING), scope (ENUM), deref (ENUM), size limit (INT),
+    // time limit (INT), types only (BOOL), filter
+
+    if payload.len() < 10 {
+        return None;
+    }
+
+    let mut idx = 0;
+
+    // Skip APPLICATION 3 tag (0x63) and length if present
+    if payload[idx] == 0x63 {
+        idx += 1;
+        if idx >= payload.len() {
+            return None;
+        }
+        // Skip length (can be short or long form)
+        if payload[idx] & 0x80 != 0 {
+            let len_bytes = (payload[idx] & 0x7f) as usize;
+            idx += 1 + len_bytes;
+        } else {
+            idx += 1;
+        }
+    }
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Now we should be at base DN (OCTET STRING)
+    if payload[idx] != 0x04 {
+        return None;
+    }
+    idx += 1;
+    if idx >= payload.len() {
+        return None;
+    }
+    let dn_len = payload[idx] as usize;
+    idx += 1 + dn_len;
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Skip scope (ENUMERATED)
+    if payload[idx] != 0x0a {
+        return None;
+    }
+    idx += 2;
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Skip derefAliases (ENUMERATED)
+    if payload[idx] != 0x0a {
+        return None;
+    }
+    idx += 2;
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Skip sizeLimit (INTEGER)
+    if payload[idx] != 0x02 {
+        return None;
+    }
+    idx += 1;
+    if idx >= payload.len() {
+        return None;
+    }
+    let size_len = payload[idx] as usize;
+    idx += 1 + size_len;
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Skip timeLimit (INTEGER)
+    if payload[idx] != 0x02 {
+        return None;
+    }
+    idx += 1;
+    if idx >= payload.len() {
+        return None;
+    }
+    let time_len = payload[idx] as usize;
+    idx += 1 + time_len;
+
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Skip typesOnly (BOOLEAN)
+    if payload[idx] != 0x01 {
+        return None;
+    }
+    idx += 2;
+
+    // Now we're at the filter - extract remaining bytes as a string
+    if idx >= payload.len() {
+        return None;
+    }
+
+    // Filter contains the rest - try to extract readable parts
+    let filter_bytes = &payload[idx..];
+    Some(String::from_utf8_lossy(filter_bytes).to_string())
+}
+
 async fn handle_search_request(
     message_id: u32,
-    _payload: &[u8],
+    payload: &[u8],
     db: &Arc<dyn DbService>,
     base_dn: &str,
     authenticated_org: &Option<String>,
     search_bind_org: &Option<String>,
 ) -> Vec<u8> {
-    debug!("Processing search request");
+    info!(
+        "Processing search request, payload length: {}",
+        payload.len()
+    );
+
+    // Simple approach: search for group-related strings in the entire payload
+    let payload_str = String::from_utf8_lossy(payload).to_lowercase();
+
+    // Check if this is a group search
+    let is_group_search = payload_str.contains("groupofnames")
+        || payload_str.contains("groupofuniquenames")
+        || payload_str.contains("posixgroup");
+
+    // Check if searching for groups a specific user is member of
+    let member_search = if payload_str.contains("member=cn=") {
+        // Extract username from member=cn=<username>,ou=...
+        extract_member_username(&payload_str)
+    } else {
+        None
+    };
 
     // Per LDAP standards: if a search_bind_org is configured, only authenticated users
     // from that organization can search. If not configured, anonymous searches are allowed
@@ -685,27 +815,78 @@ async fn handle_search_request(
         }
     };
 
-    // In a full implementation, we would parse the search filter, base DN, scope, etc.
-    // For now, we'll return all users in the organization as a simple search result
-
     let mut responses = Vec::new();
 
-    // Try to get users from the organization
-    match db.list_users(org).await {
-        Ok(users) => {
-            for user in users {
-                let dn = format!("cn={},ou={},{}", user.username, org, base_dn);
-                let entry_response = create_search_entry_response(
-                    message_id,
-                    &dn,
-                    &user.username,
-                    user.email.as_deref(),
-                );
-                responses.extend_from_slice(&entry_response);
+    // Handle group searches
+    if is_group_search {
+        info!("Group search detected - querying groups from database");
+
+        // If searching for groups a specific user is member of
+        if let Some(username) = member_search {
+            info!("Searching for groups where user '{}' is a member", username);
+            match db.get_user_groups(org, &username).await {
+                Ok(groups) => {
+                    for group in groups {
+                        let dn = group.to_dn(base_dn);
+                        let entry_response = create_group_search_entry_response(
+                            message_id,
+                            &dn,
+                            &group.name,
+                            group.description.as_deref(),
+                            &group.members,
+                        );
+                        responses.extend_from_slice(&entry_response);
+                    }
+                    info!(
+                        "Found {} groups for user '{}'",
+                        responses.len() / 100,
+                        username
+                    ); // rough estimate
+                }
+                Err(e) => {
+                    warn!("Error searching user groups: {}", e);
+                }
+            }
+        } else {
+            // List all groups in the organization
+            info!("Listing all groups in organization '{}'", org);
+            match db.list_groups(org).await {
+                Ok(groups) => {
+                    for group in groups {
+                        let dn = group.to_dn(base_dn);
+                        let entry_response = create_group_search_entry_response(
+                            message_id,
+                            &dn,
+                            &group.name,
+                            group.description.as_deref(),
+                            &group.members,
+                        );
+                        responses.extend_from_slice(&entry_response);
+                    }
+                }
+                Err(e) => {
+                    warn!("Error searching groups: {}", e);
+                }
             }
         }
-        Err(e) => {
-            warn!("Error searching users: {}", e);
+    } else {
+        // Regular user search - return all users in the organization
+        match db.list_users(org).await {
+            Ok(users) => {
+                for user in users {
+                    let dn = format!("cn={},ou={},{}", user.username, org, base_dn);
+                    let entry_response = create_search_entry_response(
+                        message_id,
+                        &dn,
+                        &user.username,
+                        user.email.as_deref(),
+                    );
+                    responses.extend_from_slice(&entry_response);
+                }
+            }
+            Err(e) => {
+                warn!("Error searching users: {}", e);
+            }
         }
     }
 
@@ -713,7 +894,22 @@ async fn handle_search_request(
     let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
     responses.extend_from_slice(&done_response);
 
+    // Send search result done
+    let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
+    responses.extend_from_slice(&done_response);
+
     responses
+}
+
+fn extract_member_username(payload_str: &str) -> Option<String> {
+    // Extract username from "member=cn=<username>,ou=..." pattern
+    if let Some(start) = payload_str.find("member=cn=") {
+        let after_cn = &payload_str[start + 10..]; // Skip "member=cn="
+        if let Some(end) = after_cn.find(',') {
+            return Some(after_cn[..end].to_string());
+        }
+    }
+    None
 }
 
 async fn handle_extended_request(
@@ -945,6 +1141,150 @@ fn create_search_entry_response(
     // Calculate total_len (entire message content)
     // Message ID: tag(1) + len(1) + bytes
     // Search Result Entry: tag(1) + len_bytes + entry content
+    let entry_len_bytes = if entry_len < 128 { 1 } else { 2 };
+    let total_len = 2 + message_id_bytes.len() + 1 + entry_len_bytes + entry_len;
+
+    // SEQUENCE
+    response.push(0x30);
+    if total_len < 128 {
+        response.push(total_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(total_len as u8);
+    }
+
+    // Message ID
+    response.push(0x02);
+    response.push(message_id_bytes.len() as u8);
+    response.extend_from_slice(&message_id_bytes);
+
+    // Search Result Entry
+    response.push(0x64); // APPLICATION 4
+    if entry_len < 128 {
+        response.push(entry_len as u8);
+    } else {
+        response.push(0x81);
+        response.push(entry_len as u8);
+    }
+
+    // DN
+    response.push(0x04);
+    response.push(dn_bytes.len() as u8);
+    response.extend_from_slice(dn_bytes);
+
+    // Attributes
+    response.push(0x30); // SEQUENCE
+    if attrs.len() < 128 {
+        response.push(attrs.len() as u8);
+    } else {
+        response.push(0x81);
+        response.push(attrs.len() as u8);
+    }
+    response.extend_from_slice(&attrs);
+
+    response
+}
+
+fn create_group_search_entry_response(
+    message_id: u32,
+    dn: &str,
+    cn: &str,
+    description: Option<&str>,
+    members: &[String],
+) -> Vec<u8> {
+    let mut response = Vec::new();
+
+    // Build attributes for groupOfNames
+    let mut attrs = Vec::new();
+
+    // cn attribute
+    let cn_bytes = cn.as_bytes();
+    let mut cn_attr = vec![
+        0x30, // SEQUENCE
+        (4 + cn_bytes.len()) as u8,
+        0x04, // OCTET STRING
+        0x02, // length of "cn"
+    ];
+    cn_attr.extend_from_slice(b"cn");
+    cn_attr.push(0x31); // SET
+    cn_attr.push((cn_bytes.len() + 2) as u8);
+    cn_attr.push(0x04); // OCTET STRING
+    cn_attr.push(cn_bytes.len() as u8);
+    cn_attr.extend_from_slice(cn_bytes);
+    attrs.extend_from_slice(&cn_attr);
+
+    // objectClass attribute (groupOfNames)
+    let oc_value = b"groupOfNames";
+    let mut oc_attr = vec![
+        0x30, // SEQUENCE
+        (15 + oc_value.len()) as u8,
+        0x04, // OCTET STRING
+        0x0b, // length of "objectClass"
+    ];
+    oc_attr.extend_from_slice(b"objectClass");
+    oc_attr.push(0x31); // SET
+    oc_attr.push((oc_value.len() + 2) as u8);
+    oc_attr.push(0x04); // OCTET STRING
+    oc_attr.push(oc_value.len() as u8);
+    oc_attr.extend_from_slice(oc_value);
+    attrs.extend_from_slice(&oc_attr);
+
+    // description attribute (if present)
+    if let Some(desc) = description {
+        let desc_bytes = desc.as_bytes();
+        let mut desc_attr = vec![
+            0x30, // SEQUENCE
+            (13 + desc_bytes.len()) as u8,
+            0x04, // OCTET STRING
+            0x0b, // length of "description"
+        ];
+        desc_attr.extend_from_slice(b"description");
+        desc_attr.push(0x31); // SET
+        desc_attr.push((desc_bytes.len() + 2) as u8);
+        desc_attr.push(0x04); // OCTET STRING
+        desc_attr.push(desc_bytes.len() as u8);
+        desc_attr.extend_from_slice(desc_bytes);
+        attrs.extend_from_slice(&desc_attr);
+    }
+
+    // member attributes (one for each member)
+    for member in members {
+        let member_dn = format!("cn={}", member); // Simplified DN
+        let member_bytes = member_dn.as_bytes();
+        let mut member_attr = vec![
+            0x30, // SEQUENCE
+            (8 + member_bytes.len()) as u8,
+            0x04, // OCTET STRING
+            0x06, // length of "member"
+        ];
+        member_attr.extend_from_slice(b"member");
+        member_attr.push(0x31); // SET
+        member_attr.push((member_bytes.len() + 2) as u8);
+        member_attr.push(0x04); // OCTET STRING
+        member_attr.push(member_bytes.len() as u8);
+        member_attr.extend_from_slice(member_bytes);
+        attrs.extend_from_slice(&member_attr);
+    }
+
+    let dn_bytes = dn.as_bytes();
+
+    // Encode message_id (can be larger than 255)
+    let message_id_bytes = if message_id <= 0xFF {
+        vec![message_id as u8]
+    } else if message_id <= 0xFFFF {
+        vec![(message_id >> 8) as u8, message_id as u8]
+    } else {
+        vec![
+            (message_id >> 16) as u8,
+            (message_id >> 8) as u8,
+            message_id as u8,
+        ]
+    };
+
+    // Calculate entry_len (DN + Attributes)
+    let entry_len = 2 + dn_bytes.len() + 2 + attrs.len();
+
+    // Calculate total_len (entire message content)
     let entry_len_bytes = if entry_len < 128 { 1 } else { 2 };
     let total_len = 2 + message_id_bytes.len() + 1 + entry_len_bytes + entry_len;
 
