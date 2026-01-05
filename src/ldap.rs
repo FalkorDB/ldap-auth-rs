@@ -378,7 +378,7 @@ async fn handle_tls_connection(
 /// Supported formats:
 /// - cn=username,ou=organization,dc=example,dc=com
 /// - cn=username,dc=domain,dc=tld (uses first DC as organization)
-/// Accepts both lowercase (cn=, ou=, dc=) and uppercase (CN=, OU=, DC=) prefixes
+///   Accepts both lowercase (cn=, ou=, dc=) and uppercase (CN=, OU=, DC=) prefixes
 fn parse_dn(dn: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = dn.split(',').collect();
     if parts.len() < 2 {
