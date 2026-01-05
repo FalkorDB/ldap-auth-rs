@@ -60,13 +60,12 @@ impl Config {
         let mut url = "redis://".to_string();
 
         if let (Some(username), Some(password)) = (&self.redis_username, &self.redis_password) {
+            // ACL authentication with username and password
             url.push_str(&format!("{}:{}@", username, password));
-        } else if let Some(username) = &self.redis_username {
-            url.push_str(&format!("{}@", username));
         } else if let Some(password) = &self.redis_password {
+            // Password-only authentication (default user)
             url.push_str(&format!(":{}@", password));
         }
-
         url.push_str(&format!("{}:{}", self.redis_host, self.redis_port));
         url
     }

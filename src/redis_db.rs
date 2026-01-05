@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use deadpool_redis::{Config as PoolConfig, Pool, Runtime};
 use redis::AsyncCommands;
+use tracing::{info, warn};
 
 use crate::db::DbService;
 use crate::error::{AppError, Result};
@@ -14,14 +15,54 @@ pub struct RedisDbService {
 }
 
 impl RedisDbService {
-    /// Create a new RedisDbService from a Redis URL
+    /// Create a new RedisDbService from a Redis URL with retry logic
     pub async fn new(redis_url: &str) -> Result<Self> {
+        Self::new_with_retry(redis_url, 10, tokio::time::Duration::from_secs(2)).await
+    }
+
+    /// Create a new RedisDbService with configurable retry parameters
+    pub async fn new_with_retry(
+        redis_url: &str,
+        max_retries: u32,
+        initial_delay: tokio::time::Duration,
+    ) -> Result<Self> {
         let cfg = PoolConfig::from_url(redis_url);
         let pool = cfg
             .create_pool(Some(Runtime::Tokio1))
             .map_err(|e| AppError::Database(format!("Failed to create Redis pool: {}", e)))?;
 
-        // Test the connection
+        // Retry connection with exponential backoff
+        let mut retries = 0;
+        let mut delay = initial_delay;
+
+        loop {
+            match Self::test_connection(&pool).await {
+                Ok(_) => {
+                    info!("Successfully connected to Redis");
+                    return Ok(Self { pool });
+                }
+                Err(e) => {
+                    retries += 1;
+                    if retries >= max_retries {
+                        return Err(AppError::Database(format!(
+                            "Failed to connect to Redis after {} attempts: {}",
+                            max_retries, e
+                        )));
+                    }
+                    warn!(
+                        "Failed to connect to Redis (attempt {}/{}): {}. Retrying in {:?}...",
+                        retries, max_retries, e, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                    // Exponential backoff with max 30 seconds
+                    delay = std::cmp::min(delay * 2, tokio::time::Duration::from_secs(30));
+                }
+            }
+        }
+    }
+
+    /// Test the Redis connection
+    async fn test_connection(pool: &Pool) -> Result<()> {
         let mut conn = pool.get().await.map_err(|e| {
             AppError::Database(format!("Failed to get connection from pool: {}", e))
         })?;
@@ -31,7 +72,7 @@ impl RedisDbService {
             .await
             .map_err(|e| AppError::Database(format!("Failed to ping Redis: {}", e)))?;
 
-        Ok(Self { pool })
+        Ok(())
     }
 
     fn user_key(organization: &str, username: &str) -> String {

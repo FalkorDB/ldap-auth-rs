@@ -63,13 +63,14 @@ async fn main() -> anyhow::Result<()> {
     config.validate()?;
     info!("Configuration validated successfully");
 
-    // Initialize database
+    // Initialize database with retry logic
     let redis_url = config.redis_url();
-    let db = Arc::new(RedisDbService::new(&redis_url).await?) as Arc<dyn db::DbService>;
     info!(
-        "Connected to Redis at {}:{}",
+        "Connecting to Redis at {}:{} (with retry logic)...",
         config.redis_host, config.redis_port
     );
+    let db = Arc::new(RedisDbService::new(&redis_url).await?) as Arc<dyn db::DbService>;
+    info!("Successfully connected to Redis");
 
     // Start API server with optional TLS
     let api_db = db.clone();

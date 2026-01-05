@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "ldap-auth-cli")]
@@ -20,6 +21,14 @@ struct Cli {
     /// Bearer token for authentication
     #[arg(short, long, env = "LDAP_AUTH_TOKEN")]
     token: Option<String>,
+
+    /// Allow insecure TLS connections (skip certificate verification)
+    #[arg(long, env = "LDAP_AUTH_INSECURE")]
+    insecure: bool,
+
+    /// Path to CA certificate file for TLS verification
+    #[arg(long, env = "LDAP_AUTH_CA_CERT")]
+    ca_cert: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -282,7 +291,25 @@ fn print_response(response: Value) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let client = Client::new();
+
+    // Build HTTP client with TLS configuration
+    let mut client_builder = Client::builder();
+
+    if cli.insecure {
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+
+    if let Some(ca_cert_path) = &cli.ca_cert {
+        let ca_cert_contents = std::fs::read(ca_cert_path)
+            .with_context(|| format!("Failed to read CA certificate from {:?}", ca_cert_path))?;
+        let ca_cert = reqwest::Certificate::from_pem(&ca_cert_contents)
+            .context("Failed to parse CA certificate")?;
+        client_builder = client_builder.add_root_certificate(ca_cert);
+    }
+
+    let client = client_builder
+        .build()
+        .context("Failed to build HTTP client")?;
 
     match cli.command {
         Commands::Health => {
