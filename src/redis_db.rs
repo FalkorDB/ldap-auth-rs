@@ -26,16 +26,33 @@ impl RedisDbService {
         max_retries: u32,
         initial_delay: tokio::time::Duration,
     ) -> Result<Self> {
-        let cfg = PoolConfig::from_url(redis_url);
-        let pool = cfg
-            .create_pool(Some(Runtime::Tokio1))
-            .map_err(|e| AppError::Database(format!("Failed to create Redis pool: {}", e)))?;
-
         // Retry connection with exponential backoff
         let mut retries = 0;
         let mut delay = initial_delay;
 
         loop {
+            // Recreate the pool on each attempt to force DNS re-resolution
+            let cfg = PoolConfig::from_url(redis_url);
+            let pool = match cfg.create_pool(Some(Runtime::Tokio1)) {
+                Ok(pool) => pool,
+                Err(e) => {
+                    retries += 1;
+                    if retries >= max_retries {
+                        return Err(AppError::Database(format!(
+                            "Failed to create Redis pool after {} attempts: {}",
+                            max_retries, e
+                        )));
+                    }
+                    warn!(
+                        "Failed to create Redis pool (attempt {}/{}): {}. Retrying in {:?}...",
+                        retries, max_retries, e, delay
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay = std::cmp::min(delay * 2, tokio::time::Duration::from_secs(30));
+                    continue;
+                }
+            };
+
             match Self::test_connection(&pool).await {
                 Ok(_) => {
                     info!("Successfully connected to Redis");
