@@ -643,6 +643,7 @@ async fn handle_search_request(
 
     // Simple approach: search for group-related strings in the entire payload
     let payload_str = String::from_utf8_lossy(payload).to_lowercase();
+    debug!("Payload string (lowercase): {}", payload_str);
 
     // Check if this is a group search
     let is_group_search = payload_str.contains("groupofnames")
@@ -650,12 +651,10 @@ async fn handle_search_request(
         || payload_str.contains("posixgroup");
 
     // Check if searching for groups a specific user is member of
-    let member_search = if payload_str.contains("member=cn=") {
-        // Extract username from member=cn=<username>,ou=...
-        extract_member_username(&payload_str)
-    } else {
-        None
-    };
+    // In LDAP BER encoding, the filter might have the pattern differently
+    // Try multiple patterns: "member=cn=", "member" followed by "cn="
+    let member_search = extract_member_username(&payload_str);
+    debug!("Member search result: {:?}", member_search);
 
     // Per LDAP standards: if a search_bind_org is configured, only authenticated users
     // from that organization can search. If not configured, anonymous searches are allowed
@@ -792,12 +791,31 @@ async fn handle_search_request(
 
 fn extract_member_username(payload_str: &str) -> Option<String> {
     // Extract username from "member=cn=<username>,ou=..." pattern
+    // Try different patterns as LDAP BER encoding might separate them
+
+    // Pattern 1: Direct "member=cn=" (most common)
     if let Some(start) = payload_str.find("member=cn=") {
         let after_cn = &payload_str[start + 10..]; // Skip "member=cn="
         if let Some(end) = after_cn.find(',') {
             return Some(after_cn[..end].to_string());
         }
     }
+
+    // Pattern 2: "member" followed by "cn=" with possible separators
+    // In BER encoding, attribute name and value might be separated
+    if let Some(member_pos) = payload_str.find("member") {
+        let after_member = &payload_str[member_pos + 6..]; // Skip "member"
+        if let Some(cn_pos) = after_member.find("cn=") {
+            let after_cn = &after_member[cn_pos + 3..]; // Skip "cn="
+            if let Some(end) = after_cn.find(',') {
+                let username = after_cn[..end].to_string();
+                debug!("Extracted username from pattern 2: {}", username);
+                return Some(username);
+            }
+        }
+    }
+
+    debug!("Failed to extract member username from payload");
     None
 }
 
@@ -1828,6 +1846,145 @@ mod tests {
         // Should return error response for insufficient access rights
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+    }
+
+    #[test]
+    fn test_extract_member_username_pattern1() {
+        // Pattern 1: Direct "member=cn=username,ou=..."
+        let payload =
+            "(&(objectclass=groupofnames)(member=cn=testuser,ou=testorg,dc=example,dc=com))";
+        let result = extract_member_username(payload);
+        assert_eq!(result, Some("testuser".to_string()));
+    }
+
+    #[test]
+    fn test_extract_member_username_pattern2() {
+        // Pattern 2: "member" followed by "cn=" with separators (BER encoding)
+        // Simulating BER-encoded payload where attribute and value are separated
+        let payload = "(&(objectclass=groupofnames)(member\x00\x04cn=falkordb,ou=instance-1,dc=falkordb,dc=cloud))";
+        let result = extract_member_username(payload);
+        assert_eq!(result, Some("falkordb".to_string()));
+    }
+
+    #[test]
+    fn test_extract_member_username_no_match() {
+        // No member filter present
+        let payload = "(&(objectclass=groupofnames)(cn=testgroup))";
+        let result = extract_member_username(payload);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_extract_member_username_different_case() {
+        // Test case sensitivity - in handle_search_request, payload is lowercased before extraction
+        // So simulate what the function receives
+        let payload = "(&(objectclass=groupofnames)(member=cn=username,ou=org,dc=example,dc=com))";
+        let result = extract_member_username(payload);
+        assert_eq!(result, Some("username".to_string()));
+    }
+
+    #[test]
+    fn test_extract_member_username_no_comma() {
+        // Member filter without comma (invalid format)
+        let payload = "(&(objectclass=groupofnames)(member=cn=testuser))";
+        let result = extract_member_username(payload);
+        // Should still return None if no comma is found
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_group_member_filter() {
+        use crate::models::Group;
+        use chrono::Utc;
+
+        let mut mock_db = MockDbService::new();
+        let now = Utc::now();
+
+        let test_groups = vec![Group {
+            organization: "testorg".to_string(),
+            name: "developers".to_string(),
+            description: Some("Dev team".to_string()),
+            members: vec!["testuser".to_string(), "alice".to_string()],
+            created_at: now,
+            updated_at: now,
+        }];
+
+        mock_db
+            .expect_get_user_groups()
+            .with(
+                mockall::predicate::eq("testorg"),
+                mockall::predicate::eq("testuser"),
+            )
+            .times(1)
+            .returning(move |_, _| Ok(test_groups.clone()));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = Some("testorg".to_string());
+        let search_bind_org = None;
+
+        // Simulate LDAP filter with member search
+        let payload =
+            b"(&(objectclass=groupofnames)(member=cn=testuser,ou=testorg,dc=example,dc=com))";
+
+        let response =
+            handle_search_request(1, payload, &db, base_dn, &auth_org, &search_bind_org).await;
+
+        assert!(!response.is_empty());
+        // Should contain the group name "developers"
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("developers"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_search_request_all_groups() {
+        use crate::models::Group;
+        use chrono::Utc;
+
+        let mut mock_db = MockDbService::new();
+        let now = Utc::now();
+
+        let test_groups = vec![
+            Group {
+                organization: "testorg".to_string(),
+                name: "admins".to_string(),
+                description: Some("Admin group".to_string()),
+                members: vec!["admin".to_string()],
+                created_at: now,
+                updated_at: now,
+            },
+            Group {
+                organization: "testorg".to_string(),
+                name: "users".to_string(),
+                description: None,
+                members: vec!["user1".to_string(), "user2".to_string()],
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        mock_db
+            .expect_list_groups()
+            .with(mockall::predicate::eq("testorg"))
+            .times(1)
+            .returning(move |_| Ok(test_groups.clone()));
+
+        let db = Arc::new(mock_db) as Arc<dyn DbService>;
+        let base_dn = "dc=example,dc=com";
+        let auth_org = Some("testorg".to_string());
+        let search_bind_org = None;
+
+        // Simulate LDAP filter for all groups (no member filter)
+        let payload = b"(objectclass=groupofnames)";
+
+        let response =
+            handle_search_request(1, payload, &db, base_dn, &auth_org, &search_bind_org).await;
+
+        assert!(!response.is_empty());
+        // Should contain both group names
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(response_str.contains("admins"));
+        assert!(response_str.contains("users"));
     }
 
     #[tokio::test]
