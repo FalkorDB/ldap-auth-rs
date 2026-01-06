@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod ldap;
+pub mod ldap_lib;
 pub mod metrics;
 pub mod models;
 pub mod password;

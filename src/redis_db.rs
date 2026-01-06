@@ -16,8 +16,9 @@ pub struct RedisDbService {
 
 impl RedisDbService {
     /// Create a new RedisDbService from a Redis URL with retry logic
-    pub async fn new(redis_url: &str) -> Result<Self> {
-        Self::new_with_retry(redis_url, 10, tokio::time::Duration::from_secs(2)).await
+    pub async fn new(redis_url: &str, retry: Option<u32>) -> Result<Self> {
+        let retry = retry.unwrap_or(10);
+        Self::new_with_retry(redis_url, retry, tokio::time::Duration::from_secs(2)).await
     }
 
     /// Create a new RedisDbService with configurable retry parameters

@@ -13,21 +13,22 @@ struct Cli {
     #[arg(
         short,
         long,
+        global = true,
         env = "LDAP_AUTH_URL",
         default_value = "http://localhost:8080"
     )]
     url: String,
 
     /// Bearer token for authentication
-    #[arg(short, long, env = "LDAP_AUTH_TOKEN")]
+    #[arg(short, long, global = true, env = "LDAP_AUTH_TOKEN")]
     token: Option<String>,
 
     /// Allow insecure TLS connections (skip certificate verification)
-    #[arg(long, env = "LDAP_AUTH_INSECURE")]
+    #[arg(long, global = true, env = "LDAP_AUTH_INSECURE")]
     insecure: bool,
 
     /// Path to CA certificate file for TLS verification
-    #[arg(long, env = "LDAP_AUTH_CA_CERT")]
+    #[arg(long, global = true, env = "LDAP_AUTH_CA_CERT")]
     ca_cert: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -56,17 +57,17 @@ enum UserCommands {
         #[arg(short, long)]
         org: String,
         /// Username
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
         /// Password
         #[arg(short, long)]
         password: String,
         /// Email
         #[arg(short, long)]
-        email: String,
+        email: Option<String>,
         /// Full name
         #[arg(short, long)]
-        name: String,
+        name: Option<String>,
     },
     /// Get a user
     Get {
@@ -74,7 +75,7 @@ enum UserCommands {
         #[arg(short, long)]
         org: String,
         /// Username
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
     },
     /// List users in an organization
@@ -89,7 +90,7 @@ enum UserCommands {
         #[arg(short, long)]
         org: String,
         /// Username
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
         /// New email
         #[arg(long)]
@@ -107,7 +108,7 @@ enum UserCommands {
         #[arg(short, long)]
         org: String,
         /// Username
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
     },
     /// Get user's groups
@@ -116,7 +117,7 @@ enum UserCommands {
         #[arg(short, long)]
         org: String,
         /// Username
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
     },
 }
@@ -180,7 +181,7 @@ enum GroupCommands {
         #[arg(short, long)]
         name: String,
         /// Username to add
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
     },
     /// Remove a member from a group
@@ -192,7 +193,7 @@ enum GroupCommands {
         #[arg(short, long)]
         name: String,
         /// Username to remove
-        #[arg(short, long)]
+        #[arg(long)]
         username: String,
     },
 }
@@ -202,8 +203,8 @@ struct UserCreate {
     organization: String,
     username: String,
     password: String,
-    email: String,
-    full_name: String,
+    email: Option<String>,
+    full_name: Option<String>,
 }
 
 #[derive(Serialize)]

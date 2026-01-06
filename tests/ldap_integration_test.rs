@@ -12,10 +12,10 @@ use tokio_rustls::TlsConnector;
 
 async fn setup_test_db() -> Arc<dyn DbService> {
     let redis_url =
-        std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+        std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6390/15".to_string());
 
     Arc::new(
-        RedisDbService::new(&redis_url)
+        RedisDbService::new(&redis_url, Some(1))
             .await
             .expect("Failed to connect to Redis"),
     )

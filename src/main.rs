@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod error;
 mod ldap;
+mod ldap_lib;
 mod metrics;
 mod models;
 mod password;
@@ -69,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
         "Connecting to Redis at {}:{} (with retry logic)...",
         config.redis_host, config.redis_port
     );
-    let db = Arc::new(RedisDbService::new(&redis_url).await?) as Arc<dyn db::DbService>;
+    let db = Arc::new(RedisDbService::new(&redis_url, None).await?) as Arc<dyn db::DbService>;
     info!("Successfully connected to Redis");
 
     // Start API server with optional TLS

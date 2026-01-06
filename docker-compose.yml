@@ -4,11 +4,12 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6390:6390"
+    command: ["redis-server", "--port", "6390"]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6390", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -22,11 +23,12 @@ services:
       - "3389:3389"
     environment:
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT=6390
       - API_PORT=8080
       - LDAP_PORT=3389
       - LDAP_BASE_DN=dc=example,dc=com
-      - RUST_LOG=info
+      - RUST_LOG=debug
+      - API_BEARER_TOKEN=asdf
     depends_on:
       redis:
         condition: service_healthy

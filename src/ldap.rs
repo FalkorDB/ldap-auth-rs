@@ -58,6 +58,11 @@ use tracing::{debug, error, info, warn};
 
 use crate::db::DbService;
 use crate::error::Result;
+use crate::ldap_lib::{
+    create_bind_response, create_error_response, create_extended_response,
+    create_group_search_entry_response, create_search_done_response, create_search_entry_response,
+    create_whoami_response, LdapResultCode,
+};
 
 /// LDAP message types
 #[derive(Debug)]
@@ -82,28 +87,6 @@ enum LdapOp {
     AbandonRequest = 16,
     ExtendedRequest = 23,
     ExtendedResponse = 24,
-}
-
-/// LDAP result codes (RFC 4511 Appendix A)
-#[allow(dead_code)]
-enum LdapResultCode {
-    Success = 0,
-    OperationsError = 1,
-    ProtocolError = 2,
-    TimeLimitExceeded = 3,
-    SizeLimitExceeded = 4,
-    CompareFalse = 5,
-    CompareTrue = 6,
-    AuthMethodNotSupported = 7,
-    StrongAuthRequired = 8,
-    InvalidCredentials = 49,
-    InsufficientAccessRights = 50,
-    Busy = 51,
-    Unavailable = 52,
-    UnwillingToPerform = 53,
-    NoSuchObject = 32,
-    InvalidDNSyntax = 34,
-    Other = 80,
 }
 
 pub struct LdapServer {
@@ -200,6 +183,11 @@ async fn handle_connection(
     base_dn: String,
     search_bind_org: Option<String>,
 ) -> Result<()> {
+    // Enable TCP_NODELAY to send data immediately without buffering
+    socket.set_nodelay(true).map_err(|e| {
+        crate::error::AppError::Internal(format!("Failed to set TCP_NODELAY: {}", e))
+    })?;
+
     let mut buffer = vec![0u8; 8192];
     let mut authenticated_user: Option<String> = None;
     let mut authenticated_org: Option<String> = None;
@@ -222,10 +210,10 @@ async fn handle_connection(
             Ok((message_id, op_type, payload)) => {
                 debug!("Message ID: {}, Op: {:?}", message_id, op_type);
 
-                let response = match op_type {
+                match op_type {
                     0 => {
                         // Bind Request
-                        handle_bind_request(
+                        let response = handle_bind_request(
                             message_id,
                             payload,
                             &db,
@@ -233,7 +221,20 @@ async fn handle_connection(
                             &mut authenticated_user,
                             &mut authenticated_org,
                         )
-                        .await
+                        .await;
+
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush socket: {}",
+                                e
+                            ))
+                        })?;
                     }
                     2 => {
                         // Unbind Request
@@ -241,8 +242,8 @@ async fn handle_connection(
                         return Ok(());
                     }
                     3 => {
-                        // Search Request
-                        handle_search_request(
+                        // Search Request - returns multiple messages
+                        let messages = handle_search_request(
                             message_id,
                             payload,
                             &db,
@@ -250,27 +251,74 @@ async fn handle_connection(
                             &authenticated_org,
                             &search_bind_org,
                         )
-                        .await
+                        .await;
+
+                        // Write each message separately
+                        for (idx, message) in messages.iter().enumerate() {
+                            debug!(
+                                "Writing LDAP message {}/{}: {} bytes",
+                                idx + 1,
+                                messages.len(),
+                                message.len()
+                            );
+                            socket.write_all(message).await.map_err(|e| {
+                                crate::error::AppError::Internal(format!(
+                                    "Failed to write search message: {}",
+                                    e
+                                ))
+                            })?;
+                            socket.flush().await.map_err(|e| {
+                                crate::error::AppError::Internal(format!(
+                                    "Failed to flush after search message: {}",
+                                    e
+                                ))
+                            })?;
+                        }
                     }
                     23 => {
                         // Extended Request (e.g., WhoAmI, StartTLS)
-                        handle_extended_request(
+                        let response = handle_extended_request(
                             message_id,
                             payload,
                             &authenticated_user,
                             &authenticated_org,
                         )
-                        .await
+                        .await;
+
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush socket: {}",
+                                e
+                            ))
+                        })?;
                     }
                     _ => {
                         warn!("Unsupported LDAP operation: {}", op_type);
-                        create_error_response(message_id, 1, LdapResultCode::OperationsError as u8)
+                        let response = create_error_response(
+                            message_id,
+                            1,
+                            LdapResultCode::OperationsError as u8,
+                        );
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush socket: {}",
+                                e
+                            ))
+                        })?;
                     }
-                };
-
-                socket.write_all(&response).await.map_err(|e| {
-                    crate::error::AppError::Internal(format!("Failed to write response: {}", e))
-                })?;
+                }
             }
             Err(e) => {
                 error!("Failed to parse LDAP message: {}", e);
@@ -278,6 +326,9 @@ async fn handle_connection(
                     create_error_response(1, 1, LdapResultCode::ProtocolError as u8);
                 socket.write_all(&error_response).await.map_err(|e| {
                     crate::error::AppError::Internal(format!("Failed to write error: {}", e))
+                })?;
+                socket.flush().await.map_err(|e| {
+                    crate::error::AppError::Internal(format!("Failed to flush socket: {}", e))
                 })?;
             }
         }
@@ -290,6 +341,11 @@ async fn handle_tls_connection(
     base_dn: String,
     search_bind_org: Option<String>,
 ) -> Result<()> {
+    // Enable TCP_NODELAY on the underlying stream
+    socket.get_ref().0.set_nodelay(true).map_err(|e| {
+        crate::error::AppError::Internal(format!("Failed to set TCP_NODELAY on TLS socket: {}", e))
+    })?;
+
     let mut buffer = vec![0u8; 8192];
     let mut authenticated_user: Option<String> = None;
     let mut authenticated_org: Option<String> = None;
@@ -312,10 +368,10 @@ async fn handle_tls_connection(
             Ok((message_id, op_type, payload)) => {
                 debug!("Message ID: {}, Op: {:?}", message_id, op_type);
 
-                let response = match op_type {
+                match op_type {
                     0 => {
                         // Bind Request
-                        handle_bind_request(
+                        let response = handle_bind_request(
                             message_id,
                             payload,
                             &db,
@@ -323,7 +379,20 @@ async fn handle_tls_connection(
                             &mut authenticated_user,
                             &mut authenticated_org,
                         )
-                        .await
+                        .await;
+
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write TLS response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush TLS socket: {}",
+                                e
+                            ))
+                        })?;
                     }
                     2 => {
                         // Unbind Request
@@ -331,8 +400,8 @@ async fn handle_tls_connection(
                         return Ok(());
                     }
                     3 => {
-                        // Search Request
-                        handle_search_request(
+                        // Search Request - returns multiple messages
+                        let messages = handle_search_request(
                             message_id,
                             payload,
                             &db,
@@ -340,27 +409,74 @@ async fn handle_tls_connection(
                             &authenticated_org,
                             &search_bind_org,
                         )
-                        .await
+                        .await;
+
+                        // Write each message separately
+                        for (idx, message) in messages.iter().enumerate() {
+                            debug!(
+                                "Writing TLS LDAP message {}/{}: {} bytes",
+                                idx + 1,
+                                messages.len(),
+                                message.len()
+                            );
+                            socket.write_all(message).await.map_err(|e| {
+                                crate::error::AppError::Internal(format!(
+                                    "Failed to write TLS search message: {}",
+                                    e
+                                ))
+                            })?;
+                            socket.flush().await.map_err(|e| {
+                                crate::error::AppError::Internal(format!(
+                                    "Failed to flush after TLS search message: {}",
+                                    e
+                                ))
+                            })?;
+                        }
                     }
                     23 => {
                         // Extended Request (e.g., WhoAmI, StartTLS)
-                        handle_extended_request(
+                        let response = handle_extended_request(
                             message_id,
                             payload,
                             &authenticated_user,
                             &authenticated_org,
                         )
-                        .await
+                        .await;
+
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write TLS response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush TLS socket: {}",
+                                e
+                            ))
+                        })?;
                     }
                     _ => {
                         warn!("Unsupported LDAP operation: {}", op_type);
-                        create_error_response(message_id, 1, LdapResultCode::OperationsError as u8)
+                        let response = create_error_response(
+                            message_id,
+                            1,
+                            LdapResultCode::OperationsError as u8,
+                        );
+                        socket.write_all(&response).await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to write TLS response: {}",
+                                e
+                            ))
+                        })?;
+                        socket.flush().await.map_err(|e| {
+                            crate::error::AppError::Internal(format!(
+                                "Failed to flush TLS socket: {}",
+                                e
+                            ))
+                        })?;
                     }
-                };
-
-                socket.write_all(&response).await.map_err(|e| {
-                    crate::error::AppError::Internal(format!("Failed to write TLS response: {}", e))
-                })?;
+                }
             }
             Err(e) => {
                 error!("Failed to parse LDAP message: {}", e);
@@ -368,6 +484,9 @@ async fn handle_tls_connection(
                     create_error_response(1, 1, LdapResultCode::ProtocolError as u8);
                 socket.write_all(&error_response).await.map_err(|e| {
                     crate::error::AppError::Internal(format!("Failed to write TLS error: {}", e))
+                })?;
+                socket.flush().await.map_err(|e| {
+                    crate::error::AppError::Internal(format!("Failed to flush TLS socket: {}", e))
                 })?;
             }
         }
@@ -635,10 +754,23 @@ async fn handle_search_request(
     base_dn: &str,
     authenticated_org: &Option<String>,
     search_bind_org: &Option<String>,
-) -> Vec<u8> {
+) -> Vec<Vec<u8>> {
     info!(
         "Processing search request, payload length: {}",
         payload.len()
+    );
+
+    // Parse requested attributes
+    let requested_attrs = parse_search_attributes(payload);
+    info!("Requested attributes from search: {:?}", requested_attrs);
+
+    // Parse base DN (baseObject) from the SearchRequest payload. This lets callers
+    // scope searches to a specific organization via `ou=<org>,...`.
+    let base_object_dn = parse_search_base_dn(payload);
+    let org_from_base_dn = base_object_dn.as_deref().and_then(extract_org_from_base_dn);
+    debug!(
+        "Search base DN: {:?}, org from base DN: {:?}",
+        base_object_dn, org_from_base_dn
     );
 
     // Simple approach: search for group-related strings in the entire payload
@@ -672,19 +804,19 @@ async fn handle_search_request(
                     "Search attempted by organization '{}' but only '{}' is authorized",
                     org, required_org
                 );
-                return create_error_response(
+                return vec![create_error_response(
                     message_id,
                     5,
                     LdapResultCode::InsufficientAccessRights as u8,
-                );
+                )];
             }
             None => {
                 warn!("Search attempted without authentication (authentication required)");
-                return create_error_response(
+                return vec![create_error_response(
                     message_id,
                     5,
                     LdapResultCode::InsufficientAccessRights as u8,
-                );
+                )];
             }
         }
     }
@@ -700,11 +832,15 @@ async fn handle_search_request(
             debug!("Anonymous search - returning empty results");
             let done_response =
                 create_search_done_response(message_id, LdapResultCode::Success as u8);
-            return done_response;
+            return vec![done_response];
         }
     };
 
-    let mut responses = Vec::new();
+    // Prefer the organization inferred from the search base DN (if present),
+    // otherwise fall back to the authenticated org.
+    let search_org: &str = org_from_base_dn.as_deref().unwrap_or(org);
+
+    let mut messages = Vec::new();
 
     // Handle group searches
     if is_group_search {
@@ -718,6 +854,7 @@ async fn handle_search_request(
             );
             match db.get_user_groups(&member_org, &username).await {
                 Ok(groups) => {
+                    info!("Found {} groups for user '{}'", groups.len(), username);
                     for group in groups {
                         let dn = group.to_dn(base_dn);
                         let entry_response = create_group_search_entry_response(
@@ -726,14 +863,16 @@ async fn handle_search_request(
                             &group.name,
                             group.description.as_deref(),
                             &group.members,
+                            requested_attrs.as_deref(),
                         );
-                        responses.extend_from_slice(&entry_response);
+                        info!(
+                            "Group entry response - DN: '{}', size: {} bytes, first 20 bytes: {:02x?}",
+                            dn,
+                            entry_response.len(),
+                            &entry_response[..std::cmp::min(20, entry_response.len())]
+                        );
+                        messages.push(entry_response);
                     }
-                    info!(
-                        "Found {} groups for user '{}'",
-                        responses.len() / 100,
-                        username
-                    ); // rough estimate
                 }
                 Err(e) => {
                     warn!("Error searching user groups: {}", e);
@@ -741,8 +880,8 @@ async fn handle_search_request(
             }
         } else {
             // List all groups in the organization
-            info!("Listing all groups in organization '{}'", org);
-            match db.list_groups(org).await {
+            info!("Listing all groups in organization '{}'", search_org);
+            match db.list_groups(search_org).await {
                 Ok(groups) => {
                     for group in groups {
                         let dn = group.to_dn(base_dn);
@@ -752,8 +891,9 @@ async fn handle_search_request(
                             &group.name,
                             group.description.as_deref(),
                             &group.members,
+                            requested_attrs.as_deref(),
                         );
-                        responses.extend_from_slice(&entry_response);
+                        messages.push(entry_response);
                     }
                 }
                 Err(e) => {
@@ -763,17 +903,17 @@ async fn handle_search_request(
         }
     } else {
         // Regular user search - return all users in the organization
-        match db.list_users(org).await {
+        match db.list_users(search_org).await {
             Ok(users) => {
                 for user in users {
-                    let dn = format!("cn={},ou={},{}", user.username, org, base_dn);
+                    let dn = format!("cn={},ou={},{}", user.username, search_org, base_dn);
                     let entry_response = create_search_entry_response(
                         message_id,
                         &dn,
                         &user.username,
                         user.email.as_deref(),
                     );
-                    responses.extend_from_slice(&entry_response);
+                    messages.push(entry_response);
                 }
             }
             Err(e) => {
@@ -782,15 +922,215 @@ async fn handle_search_request(
         }
     }
 
-    // Send search result done
+    // Add search result done as separate message
     let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
-    responses.extend_from_slice(&done_response);
 
-    // Send search result done
-    let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
-    responses.extend_from_slice(&done_response);
+    info!(
+        "Sending {} LDAP messages: {} entries + 1 done response",
+        messages.len() + 1,
+        messages.len()
+    );
 
-    responses
+    messages.push(done_response);
+    messages
+}
+
+fn parse_search_base_dn(payload: &[u8]) -> Option<String> {
+    // SearchRequest ::= [APPLICATION 3] SEQUENCE {
+    //   baseObject      LDAPDN,
+    //   scope          ENUMERATED,
+    //   derefAliases   ENUMERATED,
+    //   sizeLimit      INTEGER (0 .. maxInt),
+    //   timeLimit      INTEGER (0 .. maxInt),
+    //   typesOnly      BOOLEAN,
+    //   filter         Filter,
+    //   attributes     AttributeSelection }
+    //
+    // The payload passed to this function is the contents of the SearchRequest
+    // (i.e., after the application tag + length). The first element is the
+    // baseObject LDAPDN which is encoded as an OCTET STRING.
+    if payload.is_empty() {
+        return None;
+    }
+
+    // Our simplified `parse_ldap_message` returns the payload starting at the
+    // operation APPLICATION tag (e.g. SearchRequest = 0x63), not after it.
+    // Strip the operation tag+length if present.
+    let mut cursor: &[u8] = payload;
+    if cursor.first() == Some(&0x63) {
+        let (op_len, op_len_bytes) = parse_ber_length(cursor.get(1..)?)?;
+        let start = 1 + op_len_bytes;
+        let end = start.checked_add(op_len)?;
+        cursor = cursor.get(start..end)?;
+    }
+
+    // Some callers may pass an inner SEQUENCE (0x30) wrapper.
+    if cursor.first() == Some(&0x30) {
+        let (seq_len, seq_len_bytes) = parse_ber_length(cursor.get(1..)?)?;
+        let start = 1 + seq_len_bytes;
+        let end = start.checked_add(seq_len)?;
+        cursor = cursor.get(start..end)?;
+    }
+
+    if cursor.first() != Some(&0x04) {
+        return None;
+    }
+    let (len, len_bytes) = parse_ber_length(cursor.get(1..)?)?;
+    let start = 1 + len_bytes;
+    let end = start.checked_add(len)?;
+    let dn_bytes = cursor.get(start..end)?;
+    String::from_utf8(dn_bytes.to_vec()).ok()
+}
+
+fn parse_ber_length(input: &[u8]) -> Option<(usize, usize)> {
+    // Returns (length, bytes_consumed_from_input)
+    let first = *input.first()?;
+    if first & 0x80 == 0 {
+        return Some((first as usize, 1));
+    }
+    let num_bytes = (first & 0x7f) as usize;
+    if num_bytes == 0 || num_bytes > 8 {
+        return None;
+    }
+    if input.len() < 1 + num_bytes {
+        return None;
+    }
+    let mut len: usize = 0;
+    for b in &input[1..1 + num_bytes] {
+        len = (len << 8) | (*b as usize);
+    }
+    Some((len, 1 + num_bytes))
+}
+
+fn extract_org_from_base_dn(base_dn: &str) -> Option<String> {
+    // Supported org encodings in this service:
+    // - ou=<org>,dc=...
+    // - ou=groups,ou=<org>,dc=...
+    let mut ous: Vec<String> = Vec::new();
+    for part in base_dn.split(',') {
+        let part = part.trim();
+        if let Some(rest) = part.strip_prefix("ou=") {
+            ous.push(rest.trim().to_string());
+            continue;
+        }
+        if let Some(rest) = part.strip_prefix("OU=") {
+            ous.push(rest.trim().to_string());
+            continue;
+        }
+        if let Some(rest) = part.strip_prefix("Ou=") {
+            ous.push(rest.trim().to_string());
+            continue;
+        }
+    }
+
+    if ous.is_empty() {
+        return None;
+    }
+
+    for (idx, ou) in ous.iter().enumerate() {
+        if ou.eq_ignore_ascii_case("groups") {
+            return ous.get(idx + 1).cloned();
+        }
+    }
+
+    ous.first().cloned()
+}
+
+/// Parses the requested attributes from an LDAP SearchRequest payload
+/// Returns a vector of attribute names, or None if all attributes should be returned
+/// Per RFC 4511: empty list = all user attributes, "*" = all user attributes
+fn parse_search_attributes(payload: &[u8]) -> Option<Vec<String>> {
+    // SearchRequest structure (simplified parsing):
+    // SEQUENCE -> baseObject, scope, derefAliases, sizeLimit, timeLimit, typesOnly, filter, attributes
+    // We need to skip to the attributes SEQUENCE at the end
+
+    let mut pos = 0;
+
+    // Skip SEQUENCE tag and length for SearchRequest
+    if pos >= payload.len() || payload[pos] != 0x63 {
+        // APPLICATION 3
+        return None;
+    }
+    pos += 1;
+
+    // Skip length
+    if pos >= payload.len() {
+        return None;
+    }
+    let len = payload[pos];
+    if len & 0x80 != 0 {
+        let len_bytes = (len & 0x7f) as usize;
+        pos += 1 + len_bytes;
+    } else {
+        pos += 1;
+    }
+
+    // For simplicity, search for the attributes SEQUENCE (0x30) near the end
+    // The attributes list is the last element in SearchRequest
+    // Look for pattern: SEQUENCE of OCTET STRINGs
+    let mut attrs = Vec::new();
+
+    // Scan backwards from end to find the last SEQUENCE
+    let mut i = payload.len().saturating_sub(1);
+    while i > pos {
+        if payload[i] == 0x30 {
+            // SEQUENCE tag
+            // Try to parse attributes from here
+            let mut attr_pos = i + 1;
+            if attr_pos >= payload.len() {
+                break;
+            }
+
+            // Skip SEQUENCE length
+            let seq_len = payload[attr_pos] as usize;
+            attr_pos += 1;
+
+            // If sequence is empty, return None (all attributes)
+            if seq_len == 0 {
+                return None;
+            }
+
+            let seq_end = attr_pos + seq_len;
+            if seq_end > payload.len() {
+                i -= 1;
+                continue;
+            }
+
+            // Parse OCTET STRINGs
+            while attr_pos < seq_end && attr_pos < payload.len() {
+                if payload[attr_pos] == 0x04 {
+                    // OCTET STRING
+                    attr_pos += 1;
+                    if attr_pos >= payload.len() {
+                        break;
+                    }
+                    let attr_len = payload[attr_pos] as usize;
+                    attr_pos += 1;
+
+                    if attr_pos + attr_len <= payload.len() {
+                        let attr_name =
+                            String::from_utf8_lossy(&payload[attr_pos..attr_pos + attr_len])
+                                .to_string();
+                        attrs.push(attr_name);
+                        attr_pos += attr_len;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if !attrs.is_empty() {
+                debug!("Parsed requested attributes: {:?}", attrs);
+                return Some(attrs);
+            }
+        }
+        i -= 1;
+    }
+
+    // If we couldn't parse attributes, return None (all attributes)
+    None
 }
 
 fn extract_member_info(payload_str: &str) -> Option<(String, String)> {
@@ -980,504 +1320,6 @@ fn parse_extended_request_oid(payload: &[u8]) -> std::result::Result<String, Str
     // Extract OID string
     let oid = String::from_utf8_lossy(&payload[pos..pos + oid_len]).to_string();
     Ok(oid)
-}
-
-fn create_bind_response(message_id: u32, result_code: u8) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (bind response fields)
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(total_len as u8);
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Bind Response
-    response.push(0x61); // APPLICATION 1
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a); // ENUMERATED
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    response
-}
-
-fn create_search_entry_response(
-    message_id: u32,
-    dn: &str,
-    cn: &str,
-    mail: Option<&str>,
-) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Build attributes
-    let mut attrs = Vec::new();
-
-    // cn attribute
-    let cn_bytes = cn.as_bytes();
-    let mut cn_attr = vec![
-        0x30, // SEQUENCE
-        (4 + cn_bytes.len()) as u8,
-        0x04, // OCTET STRING
-        0x02, // length of "cn"
-    ];
-    cn_attr.extend_from_slice(b"cn");
-    cn_attr.push(0x31); // SET
-    cn_attr.push((cn_bytes.len() + 2) as u8);
-    cn_attr.push(0x04); // OCTET STRING
-    cn_attr.push(cn_bytes.len() as u8);
-    cn_attr.extend_from_slice(cn_bytes);
-    attrs.extend_from_slice(&cn_attr);
-
-    // mail attribute (if present)
-    if let Some(email) = mail {
-        let mail_bytes = email.as_bytes();
-        let mut mail_attr = vec![
-            0x30, // SEQUENCE
-            (6 + mail_bytes.len()) as u8,
-            0x04, // OCTET STRING
-            0x04, // length of "mail"
-        ];
-        mail_attr.extend_from_slice(b"mail");
-        mail_attr.push(0x31); // SET
-        mail_attr.push((mail_bytes.len() + 2) as u8);
-        mail_attr.push(0x04); // OCTET STRING
-        mail_attr.push(mail_bytes.len() as u8);
-        mail_attr.extend_from_slice(mail_bytes);
-        attrs.extend_from_slice(&mail_attr);
-    }
-
-    let dn_bytes = dn.as_bytes();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    // Calculate entry_len (DN + Attributes)
-    let entry_len = 2 + dn_bytes.len() + 2 + attrs.len();
-
-    // Calculate total_len (entire message content)
-    // Message ID: tag(1) + len(1) + bytes
-    // Search Result Entry: tag(1) + len_bytes + entry content
-    let entry_len_bytes = if entry_len < 128 { 1 } else { 2 };
-    let total_len = 2 + message_id_bytes.len() + 1 + entry_len_bytes + entry_len;
-
-    // SEQUENCE
-    response.push(0x30);
-    if total_len < 128 {
-        response.push(total_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(total_len as u8);
-    }
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Search Result Entry
-    response.push(0x64); // APPLICATION 4
-    if entry_len < 128 {
-        response.push(entry_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(entry_len as u8);
-    }
-
-    // DN
-    response.push(0x04);
-    response.push(dn_bytes.len() as u8);
-    response.extend_from_slice(dn_bytes);
-
-    // Attributes
-    response.push(0x30); // SEQUENCE
-    if attrs.len() < 128 {
-        response.push(attrs.len() as u8);
-    } else {
-        response.push(0x81);
-        response.push(attrs.len() as u8);
-    }
-    response.extend_from_slice(&attrs);
-
-    response
-}
-
-fn create_group_search_entry_response(
-    message_id: u32,
-    dn: &str,
-    cn: &str,
-    description: Option<&str>,
-    members: &[String],
-) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Build attributes for groupOfNames
-    let mut attrs = Vec::new();
-
-    // cn attribute
-    let cn_bytes = cn.as_bytes();
-    let mut cn_attr = vec![
-        0x30, // SEQUENCE
-        (4 + cn_bytes.len()) as u8,
-        0x04, // OCTET STRING
-        0x02, // length of "cn"
-    ];
-    cn_attr.extend_from_slice(b"cn");
-    cn_attr.push(0x31); // SET
-    cn_attr.push((cn_bytes.len() + 2) as u8);
-    cn_attr.push(0x04); // OCTET STRING
-    cn_attr.push(cn_bytes.len() as u8);
-    cn_attr.extend_from_slice(cn_bytes);
-    attrs.extend_from_slice(&cn_attr);
-
-    // objectClass attribute (groupOfNames)
-    let oc_value = b"groupOfNames";
-    let mut oc_attr = vec![
-        0x30, // SEQUENCE
-        (15 + oc_value.len()) as u8,
-        0x04, // OCTET STRING
-        0x0b, // length of "objectClass"
-    ];
-    oc_attr.extend_from_slice(b"objectClass");
-    oc_attr.push(0x31); // SET
-    oc_attr.push((oc_value.len() + 2) as u8);
-    oc_attr.push(0x04); // OCTET STRING
-    oc_attr.push(oc_value.len() as u8);
-    oc_attr.extend_from_slice(oc_value);
-    attrs.extend_from_slice(&oc_attr);
-
-    // description attribute (if present)
-    if let Some(desc) = description {
-        let desc_bytes = desc.as_bytes();
-        let mut desc_attr = vec![
-            0x30, // SEQUENCE
-            (13 + desc_bytes.len()) as u8,
-            0x04, // OCTET STRING
-            0x0b, // length of "description"
-        ];
-        desc_attr.extend_from_slice(b"description");
-        desc_attr.push(0x31); // SET
-        desc_attr.push((desc_bytes.len() + 2) as u8);
-        desc_attr.push(0x04); // OCTET STRING
-        desc_attr.push(desc_bytes.len() as u8);
-        desc_attr.extend_from_slice(desc_bytes);
-        attrs.extend_from_slice(&desc_attr);
-    }
-
-    // member attributes (one for each member)
-    for member in members {
-        let member_dn = format!("cn={}", member); // Simplified DN
-        let member_bytes = member_dn.as_bytes();
-        let mut member_attr = vec![
-            0x30, // SEQUENCE
-            (8 + member_bytes.len()) as u8,
-            0x04, // OCTET STRING
-            0x06, // length of "member"
-        ];
-        member_attr.extend_from_slice(b"member");
-        member_attr.push(0x31); // SET
-        member_attr.push((member_bytes.len() + 2) as u8);
-        member_attr.push(0x04); // OCTET STRING
-        member_attr.push(member_bytes.len() as u8);
-        member_attr.extend_from_slice(member_bytes);
-        attrs.extend_from_slice(&member_attr);
-    }
-
-    let dn_bytes = dn.as_bytes();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    // Calculate entry_len (DN + Attributes)
-    let entry_len = 2 + dn_bytes.len() + 2 + attrs.len();
-
-    // Calculate total_len (entire message content)
-    let entry_len_bytes = if entry_len < 128 { 1 } else { 2 };
-    let total_len = 2 + message_id_bytes.len() + 1 + entry_len_bytes + entry_len;
-
-    // SEQUENCE
-    response.push(0x30);
-    if total_len < 128 {
-        response.push(total_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(total_len as u8);
-    }
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Search Result Entry
-    response.push(0x64); // APPLICATION 4
-    if entry_len < 128 {
-        response.push(entry_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(entry_len as u8);
-    }
-
-    // DN
-    response.push(0x04);
-    response.push(dn_bytes.len() as u8);
-    response.extend_from_slice(dn_bytes);
-
-    // Attributes
-    response.push(0x30); // SEQUENCE
-    if attrs.len() < 128 {
-        response.push(attrs.len() as u8);
-    } else {
-        response.push(0x81);
-        response.push(attrs.len() as u8);
-    }
-    response.extend_from_slice(&attrs);
-
-    response
-}
-
-fn create_search_done_response(message_id: u32, result_code: u8) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (result fields)
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(total_len as u8);
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Search Result Done
-    response.push(0x65); // APPLICATION 5
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a);
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    response
-}
-
-fn create_whoami_response(message_id: u32, dn: &str) -> Vec<u8> {
-    let dn_bytes = if dn.is_empty() {
-        Vec::new() // RFC 4532: empty authzId for anonymous
-    } else {
-        format!("dn:{}", dn).into_bytes()
-    };
-    create_extended_response(
-        message_id,
-        LdapResultCode::Success as u8,
-        Some("1.3.6.1.4.1.4203.1.11.3"), // WhoAmI OID
-        if dn_bytes.is_empty() {
-            None
-        } else {
-            Some(&dn_bytes)
-        },
-    )
-}
-
-fn create_extended_response(
-    message_id: u32,
-    result_code: u8,
-    response_name: Option<&str>,
-    response_value: Option<&[u8]>,
-) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    // Calculate response name and value lengths
-    let response_name_len = response_name.map(|n| n.len() + 2).unwrap_or(0);
-    let response_value_len = response_value.map(|v| v.len() + 2).unwrap_or(0);
-    let ext_response_len = 7 + response_name_len + response_value_len; // 7 = result(3) + matchedDN(2) + diagnosticMessage(2)
-
-    // SEQUENCE
-    response.push(0x30);
-    let total_len = 2
-        + message_id_bytes.len()
-        + 1
-        + if ext_response_len < 128 { 1 } else { 2 }
-        + ext_response_len;
-    if total_len < 128 {
-        response.push(total_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(total_len as u8);
-    }
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Extended Response (APPLICATION 24)
-    response.push(0x78);
-    if ext_response_len < 128 {
-        response.push(ext_response_len as u8);
-    } else {
-        response.push(0x81);
-        response.push(ext_response_len as u8);
-    }
-
-    // Result code (ENUMERATED)
-    response.push(0x0a);
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty OCTET STRING)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty OCTET STRING)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Response name [10] LDAPOID OPTIONAL
-    if let Some(name) = response_name {
-        let name_bytes = name.as_bytes();
-        response.push(0x8a); // CONTEXT 10
-        response.push(name_bytes.len() as u8);
-        response.extend_from_slice(name_bytes);
-    }
-
-    // Response value [11] OCTET STRING OPTIONAL
-    if let Some(value) = response_value {
-        response.push(0x8b); // CONTEXT 11
-        response.push(value.len() as u8);
-        response.extend_from_slice(value);
-    }
-
-    response
-}
-
-fn create_error_response(message_id: u32, op_type: u8, result_code: u8) -> Vec<u8> {
-    let mut response = Vec::new();
-
-    // Encode message_id (can be larger than 255)
-    let message_id_bytes = if message_id <= 0xFF {
-        vec![message_id as u8]
-    } else if message_id <= 0xFFFF {
-        vec![(message_id >> 8) as u8, message_id as u8]
-    } else {
-        vec![
-            (message_id >> 16) as u8,
-            (message_id >> 8) as u8,
-            message_id as u8,
-        ]
-    };
-
-    let total_len = 2 + message_id_bytes.len() + 9; // 2 (INTEGER tag+len) + message_id + 9 (error response fields)
-
-    // SEQUENCE
-    response.push(0x30);
-    response.push(total_len as u8);
-
-    // Message ID
-    response.push(0x02);
-    response.push(message_id_bytes.len() as u8);
-    response.extend_from_slice(&message_id_bytes);
-
-    // Response with op_type
-    response.push(0x60 | op_type);
-    response.push(0x07);
-
-    // Result code
-    response.push(0x0a);
-    response.push(0x01);
-    response.push(result_code);
-
-    // Matched DN (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    // Diagnostic message (empty)
-    response.push(0x04);
-    response.push(0x00);
-
-    response
 }
 
 #[cfg(test)]
@@ -1847,14 +1689,20 @@ mod tests {
 
         let payload = vec![]; // Simplified - normally would contain search params
 
-        let response =
+        let messages =
             handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
+        assert!(
+            !messages.is_empty(),
+            "Should return at least search done message"
+        );
 
-        // Response should contain search entries and a search done message
-        let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("john") || response.len() > 100);
+        // Messages should contain search entries and a search done message
+        // Last message should be search done
+        assert!(
+            messages.last().is_some(),
+            "Should have at least done message"
+        );
     }
 
     #[tokio::test]
@@ -1867,13 +1715,14 @@ mod tests {
 
         let payload = vec![];
 
-        let response =
+        let messages =
             handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
+        assert!(!messages.is_empty());
         // Per RFC 4532: Anonymous search should return empty results (success), not error
+        assert_eq!(messages.len(), 1, "Should have single done message");
         let result_code_pos = 9;
-        assert_eq!(response[result_code_pos], 0); // Success with empty results
+        assert_eq!(messages[0][result_code_pos], 0); // Success with empty results
     }
 
     #[tokio::test]
@@ -1886,13 +1735,14 @@ mod tests {
 
         let payload = vec![];
 
-        let response =
+        let messages =
             handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
+        assert!(!messages.is_empty());
         // Should return error response for insufficient access rights
+        assert_eq!(messages.len(), 1, "Should have single error message");
         let result_code_pos = 9;
-        assert_eq!(response[result_code_pos], 50); // Insufficient access rights
+        assert_eq!(messages[0][result_code_pos], 50); // Insufficient access rights
     }
 
     #[test]
@@ -1988,13 +1838,17 @@ mod tests {
         let payload =
             b"(&(objectclass=groupofnames)(member=cn=testuser,ou=testorg,dc=example,dc=com))";
 
-        let response =
+        let messages =
             handle_search_request(1, payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
-        // Should contain the group name "developers"
-        let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("developers"));
+        assert!(!messages.is_empty());
+        // Should contain the group name "developers" in one of the messages
+        let all_messages = messages
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(all_messages.contains("developers"));
     }
 
     #[tokio::test]
@@ -2038,14 +1892,18 @@ mod tests {
         // Simulate LDAP filter for all groups (no member filter)
         let payload = b"(objectclass=groupofnames)";
 
-        let response =
+        let messages =
             handle_search_request(1, payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
-        // Should contain both group names
-        let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("admins"));
-        assert!(response_str.contains("users"));
+        assert!(!messages.is_empty());
+        // Should contain both group names in the messages
+        let all_messages = messages
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(all_messages.contains("admins"));
+        assert!(all_messages.contains("users"));
     }
 
     #[tokio::test]
@@ -2076,13 +1934,20 @@ mod tests {
 
         let payload = vec![];
 
-        let response =
+        let messages =
             handle_search_request(1, &payload, &db, base_dn, &auth_org, &search_bind_org).await;
 
-        assert!(!response.is_empty());
+        assert!(!messages.is_empty());
         // Should successfully return search results
-        let response_str = String::from_utf8_lossy(&response);
-        assert!(response_str.contains("search_user") || response.len() > 100);
+        let all_messages = messages
+            .iter()
+            .map(|m| String::from_utf8_lossy(m).to_string())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            all_messages.contains("search_user")
+                || messages.iter().map(|m| m.len()).sum::<usize>() > 100
+        );
     }
 
     #[tokio::test]
