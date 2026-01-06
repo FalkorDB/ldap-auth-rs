@@ -23,6 +23,108 @@ fn test_ldap_url() -> String {
     std::env::var("TEST_LDAP_URL").unwrap_or_else(|_| "ldap://127.0.0.1:3389".to_string())
 }
 
+async fn setup_core_bind_data() -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let base_url = test_api_base_url();
+    let bearer_token = test_api_token();
+
+    // Ensure the built-in bind users exist.
+    // These are used across multiple ldap3 tests and shouldn't depend on a pre-populated Redis volume.
+    for (organization, username, password, email) in [
+        (
+            "instance-1",
+            "falkordb",
+            "123456",
+            "falkordb@instance-1.local",
+        ),
+        ("admin", "admin", "admin123!", "admin@admin.local"),
+    ] {
+        let response = client
+            .post(format!("{}/api/users", base_url))
+            .bearer_auth(&bearer_token)
+            .json(&serde_json::json!({
+                "organization": organization,
+                "username": username,
+                "password": password,
+                "email": email,
+            }))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() && status.as_u16() != 409 {
+            let body = response.text().await.unwrap_or_default();
+            return Err(format!(
+                "Failed to create core user {}/{}: {} - {}",
+                organization, username, status, body
+            )
+            .into());
+        }
+    }
+
+    // Ensure the instance-1 group exists and contains falkordb.
+    let response = client
+        .post(format!("{}/api/groups", base_url))
+        .bearer_auth(&bearer_token)
+        .json(&serde_json::json!({
+            "organization": "instance-1",
+            "name": "pingOnly",
+            "description": "Ping-only group",
+        }))
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() && status.as_u16() != 409 {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Failed to create core group instance-1/pingOnly: {} - {}",
+            status, body
+        )
+        .into());
+    }
+
+    let response = client
+        .post(format!(
+            "{}/api/groups/instance-1/pingOnly/members",
+            base_url
+        ))
+        .bearer_auth(&bearer_token)
+        .json(&serde_json::json!({"username": "falkordb"}))
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() && status.as_u16() != 409 {
+        let body = response.text().await.unwrap_or_default();
+        // Only tolerate 400 if it's the expected "already a member" case.
+        if status.as_u16() == 400 && body.to_lowercase().contains("already") {
+            // OK
+        } else {
+            return Err(format!(
+                "Failed to add falkordb to instance-1/pingOnly: {} - {}",
+                status, body
+            )
+            .into());
+        }
+    }
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    Ok(())
+}
+
+async fn bind_ok(ldap: &mut ldap3::Ldap, dn: &str, password: &str) {
+    let result = ldap
+        .simple_bind(dn, password)
+        .await
+        .unwrap_or_else(|e| panic!("Bind request failed for {}: {}", dn, e));
+    assert_eq!(
+        result.rc, 0,
+        "Bind rc should be 0 for {} (got {})",
+        dn, result.rc
+    );
+}
+
 /// Helper to set up test data via API
 /// Handles 409 Conflict gracefully (resource already exists)
 async fn setup_test_data() -> Result<(), Box<dyn std::error::Error>> {
@@ -151,6 +253,10 @@ async fn test_ldap3_bind_success() {
         eprintln!("Skipping ldap3 integration test (set RUN_LDAP3_TESTS=1 to enable)");
         return;
     }
+
+    setup_core_bind_data()
+        .await
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
     // Connect to LDAP server
     let (conn, mut ldap) = LdapConnAsync::new(&test_ldap_url())
         .await
@@ -164,14 +270,12 @@ async fn test_ldap3_bind_success() {
     });
 
     // Test bind with valid credentials
-    let result = ldap
-        .simple_bind("cn=falkordb,ou=instance-1,dc=example,dc=com", "123456")
-        .await;
-
-    assert!(result.is_ok(), "Bind should succeed with valid credentials");
-
-    let bind_result = result.unwrap();
-    assert_eq!(bind_result.rc, 0, "Bind result code should be 0 (success)");
+    bind_ok(
+        &mut ldap,
+        "cn=falkordb,ou=instance-1,dc=example,dc=com",
+        "123456",
+    )
+    .await;
 
     // Unbind
     let _ = ldap.unbind().await;
@@ -183,6 +287,10 @@ async fn test_ldap3_bind_invalid_credentials() {
         eprintln!("Skipping ldap3 integration test (set RUN_LDAP3_TESTS=1 to enable)");
         return;
     }
+
+    setup_core_bind_data()
+        .await
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
 
     let (conn, mut ldap) = LdapConnAsync::new(&test_ldap_url())
         .await
@@ -223,6 +331,10 @@ async fn test_ldap3_group_search_with_attribute_filter() {
         return;
     }
 
+    setup_core_bind_data()
+        .await
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
+
     let (conn, mut ldap) = LdapConnAsync::new(&test_ldap_url())
         .await
         .expect("Failed to connect");
@@ -234,17 +346,27 @@ async fn test_ldap3_group_search_with_attribute_filter() {
     });
 
     // Bind as user first
-    ldap.simple_bind("cn=falkordb,ou=instance-1,dc=example,dc=com", "123456")
-        .await
-        .expect("User bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=falkordb,ou=instance-1,dc=example,dc=com",
+        "123456",
+    )
+    .await;
 
     // Bind as admin to search
     // Bind as a user in testorg.
     // The server currently scopes searches to the authenticated org (it doesn't parse the base DN),
     // so binding as admin would search org "admin" instead of "testorg".
-    ldap.simple_bind("cn=alice,ou=testorg,dc=example,dc=com", "password123")
+    // Ensure alice exists for this test.
+    setup_test_data()
         .await
-        .expect("User bind failed");
+        .expect("Test data setup failed - ensure API is running on port 8080");
+    bind_ok(
+        &mut ldap,
+        "cn=alice,ou=testorg,dc=example,dc=com",
+        "password123",
+    )
+    .await;
 
     // Search for groups - THIS IS THE KEY TEST
     // Request ONLY the "description" attribute (like Valkey does)
@@ -304,6 +426,10 @@ async fn test_ldap3_group_search_all_attributes() {
         return;
     }
 
+    setup_core_bind_data()
+        .await
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
+
     let (conn, mut ldap) = LdapConnAsync::new(&test_ldap_url())
         .await
         .expect("Failed to connect");
@@ -314,13 +440,19 @@ async fn test_ldap3_group_search_all_attributes() {
         }
     });
 
-    ldap.simple_bind("cn=falkordb,ou=instance-1,dc=example,dc=com", "123456")
-        .await
-        .expect("User bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=falkordb,ou=instance-1,dc=example,dc=com",
+        "123456",
+    )
+    .await;
 
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
-        .await
-        .expect("Admin bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Search requesting ALL attributes (empty vector)
     let filter =
@@ -377,6 +509,10 @@ async fn test_ldap3_simple_search() {
         return;
     }
 
+    setup_core_bind_data()
+        .await
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
+
     // This test verifies basic search functionality works without timing out
     let (conn, mut ldap) = LdapConnAsync::new(&test_ldap_url())
         .await
@@ -388,9 +524,12 @@ async fn test_ldap3_simple_search() {
         }
     });
 
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
-        .await
-        .expect("Admin bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Simple search that should complete quickly
     let search_stream = timeout(
@@ -439,14 +578,20 @@ async fn test_ldap3_group_search_returns_entries() {
     });
 
     // Bind as alice
-    ldap.simple_bind("cn=alice,ou=testorg,dc=example,dc=com", "password123")
-        .await
-        .expect("User bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=alice,ou=testorg,dc=example,dc=com",
+        "password123",
+    )
+    .await;
 
     // Bind as admin to search
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
-        .await
-        .expect("Admin bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Search for groups where alice is a member
     let filter = "(&(objectClass=groupOfNames)(member=cn=alice,ou=testorg,dc=example,dc=com))";
@@ -535,13 +680,19 @@ async fn test_ldap3_group_search_all_attributes_with_data() {
         }
     });
 
-    ldap.simple_bind("cn=charlie,ou=testorg,dc=example,dc=com", "password123")
-        .await
-        .expect("User bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=charlie,ou=testorg,dc=example,dc=com",
+        "password123",
+    )
+    .await;
 
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
-        .await
-        .expect("Admin bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Search for groups where charlie is a member, requesting ALL attributes
     let filter = "(&(objectClass=groupOfNames)(member=cn=charlie,ou=testorg,dc=example,dc=com))";
@@ -631,9 +782,12 @@ async fn test_ldap3_group_search_all_groups_in_org() {
         }
     });
 
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
-        .await
-        .expect("Admin bind failed");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Search for ALL groups in testorg (no member filter)
     let filter = "(objectClass=groupOfNames)";
@@ -737,9 +891,15 @@ async fn test_ldap3_user_not_in_any_group() {
         }
     });
 
-    ldap.simple_bind("cn=admin,ou=admin,dc=example,dc=com", "admin123!")
+    setup_core_bind_data()
         .await
-        .expect("Admin bind failed");
+        .expect("Core bind data setup failed - ensure API is running on port 8080");
+    bind_ok(
+        &mut ldap,
+        "cn=admin,ou=admin,dc=example,dc=com",
+        "admin123!",
+    )
+    .await;
 
     // Search for groups where lonely user is a member
     let filter = "(&(objectClass=groupOfNames)(member=cn=lonely,ou=testorg,dc=example,dc=com))";

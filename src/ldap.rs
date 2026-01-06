@@ -57,6 +57,7 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
 
 use crate::db::DbService;
+use crate::error::AppError;
 use crate::error::Result;
 use crate::ldap_lib::{
     create_bind_response, create_error_response, create_extended_response,
@@ -734,6 +735,15 @@ async fn handle_bind_request(
         }
         Ok(false) => {
             warn!("Invalid credentials for {}/{}", org, username);
+            *authenticated_user = None;
+            *authenticated_org = None;
+            create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8)
+        }
+        Err(AppError::NotFound(_)) => {
+            warn!(
+                "Invalid credentials for {}/{} (user not found)",
+                org, username
+            );
             *authenticated_user = None;
             *authenticated_org = None;
             create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8)
