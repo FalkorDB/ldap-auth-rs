@@ -461,7 +461,8 @@ jobs:
           echo "=== Image Details ==="
           docker images ${{ env.IMAGE_NAME }}:latest --format "Size: {{.Size}}"
           echo "=== Verify binaries exist ==="
-          docker run --rm ${{ env.IMAGE_NAME }}:latest /app/ldap-auth-rs --version || echo "Main binary exists"
+          docker run --rm --entrypoint sh ${{ env.IMAGE_NAME }}:latest -c "test -x /app/ldap-auth-rs && echo 'Main binary exists'"
+          docker run --rm --entrypoint sh ${{ env.IMAGE_NAME }}:latest -c "command -v ldap-auth-cli >/dev/null && echo 'CLI binary exists'"
           docker run --rm --entrypoint ldap-auth-cli ${{ env.IMAGE_NAME }}:latest --help | head -3
           echo "=== Verify Alpine base ==="
           docker run --rm --entrypoint sh ${{ env.IMAGE_NAME }}:latest -c "cat /etc/os-release | grep 'Alpine Linux'"
