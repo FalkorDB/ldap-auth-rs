@@ -9,7 +9,7 @@ data:
   RUST_LOG: "ldap_auth_rs=info"
   
   # Redis configuration
-  REDIS_HOST: "redis-service.ldap-auth.svc.cluster.local"
+  REDIS_HOST: "redis-service"
   REDIS_PORT: "6379"
   # REDIS_USERNAME: ""  # Optional - uncomment if needed
   # Note: REDIS_PASSWORD is set in secret, not configmap
