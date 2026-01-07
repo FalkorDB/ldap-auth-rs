@@ -38,7 +38,7 @@ pub async fn validate_bearer_token(
     // Extract and validate token
     let token = &auth_header[7..]; // Skip "Bearer "
     if token != expected_token {
-        info!(
+        debug!(
             event = "auth_failed",
             reason = "invalid_token",
             "Authentication attempt with invalid token"
@@ -47,7 +47,7 @@ pub async fn validate_bearer_token(
     }
 
     // Token is valid, proceed with request
-    info!(
+    debug!(
         event = "auth_success",
         "Valid authentication token provided"
     );

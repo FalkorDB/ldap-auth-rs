@@ -148,7 +148,7 @@ impl LdapServer {
         loop {
             match listener.accept().await {
                 Ok((socket, client_addr)) => {
-                    info!("New LDAP connection from {}", client_addr);
+                    debug!("New LDAP connection from {}", client_addr);
                     let acceptor = acceptor.clone();
                     let db = self.db.clone();
                     let base_dn = self.base_dn.clone();
@@ -765,14 +765,14 @@ async fn handle_search_request(
     authenticated_org: &Option<String>,
     search_bind_org: &Option<String>,
 ) -> Vec<Vec<u8>> {
-    info!(
+    debug!(
         "Processing search request, payload length: {}",
         payload.len()
     );
 
     // Parse requested attributes
     let requested_attrs = parse_search_attributes(payload);
-    info!("Requested attributes from search: {:?}", requested_attrs);
+    debug!("Requested attributes from search: {:?}", requested_attrs);
 
     // Parse base DN (baseObject) from the SearchRequest payload. This lets callers
     // scope searches to a specific organization via `ou=<org>,...`.
@@ -854,17 +854,17 @@ async fn handle_search_request(
 
     // Handle group searches
     if is_group_search {
-        info!("Group search detected - querying groups from database");
+        debug!("Group search detected - querying groups from database");
 
         // If searching for groups a specific user is member of
         if let Some((member_org, username)) = member_search {
-            info!(
+            debug!(
                 "Searching for groups where user '{}' is a member in org '{}'",
                 username, member_org
             );
             match db.get_user_groups(&member_org, &username).await {
                 Ok(groups) => {
-                    info!("Found {} groups for user '{}'", groups.len(), username);
+                    debug!("Found {} groups for user '{}'", groups.len(), username);
                     for group in groups {
                         let dn = group.to_dn(base_dn);
                         let entry_response = create_group_search_entry_response(
@@ -890,7 +890,7 @@ async fn handle_search_request(
             }
         } else {
             // List all groups in the organization
-            info!("Listing all groups in organization '{}'", search_org);
+            debug!("Listing all groups in organization '{}'", search_org);
             match db.list_groups(search_org).await {
                 Ok(groups) => {
                     for group in groups {
@@ -935,7 +935,7 @@ async fn handle_search_request(
     // Add search result done as separate message
     let done_response = create_search_done_response(message_id, LdapResultCode::Success as u8);
 
-    info!(
+    debug!(
         "Sending {} LDAP messages: {} entries + 1 done response",
         messages.len() + 1,
         messages.len()

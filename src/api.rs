@@ -100,10 +100,10 @@ async fn create_user(
     State(db): State<AppState>,
     Json(user): Json<UserCreate>,
 ) -> Result<impl IntoResponse, AppError> {
-    info!("Creating new user");
+    debug!("Creating new user");
     let created_user = db.create_user(user).await?;
     let response: UserResponse = created_user.into();
-    info!("User created successfully");
+    debug!("User created successfully");
     Ok((StatusCode::CREATED, Json(ApiResponse::success(response))))
 }
 
@@ -131,9 +131,9 @@ async fn delete_user(
     State(db): State<AppState>,
     Path((org, username)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, AppError> {
-    info!("Deleting user");
+    debug!("Deleting user");
     db.delete_user(&org, &username).await?;
-    info!("User deleted successfully");
+    debug!("User deleted successfully");
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
@@ -152,9 +152,9 @@ async fn create_group(
     State(db): State<AppState>,
     Json(group): Json<GroupCreate>,
 ) -> Result<impl IntoResponse, AppError> {
-    info!("Creating new group");
+    debug!("Creating new group");
     let created_group = db.create_group(group).await?;
-    info!("Group created successfully");
+    debug!("Group created successfully");
     Ok((
         StatusCode::CREATED,
         Json(ApiResponse::success(created_group)),
