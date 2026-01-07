@@ -40,6 +40,10 @@ enum Commands {
     /// Health check
     Health,
 
+    /// TLS operations
+    #[command(subcommand)]
+    Tls(TlsCommands),
+
     /// User management
     #[command(subcommand)]
     User(UserCommands),
@@ -47,6 +51,16 @@ enum Commands {
     /// Group management
     #[command(subcommand)]
     Group(GroupCommands),
+}
+
+#[derive(Subcommand)]
+enum TlsCommands {
+    /// Get CA certificate from the server
+    GetCaCert {
+        /// Output file path (prints to stdout if not specified)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -318,7 +332,38 @@ async fn main() -> Result<()> {
             let response = make_request(&client, reqwest::Method::GET, &url, None, None).await?;
             print_response(response);
         }
+        Commands::Tls(tls_cmd) => match tls_cmd {
+            TlsCommands::GetCaCert { output } => {
+                let url = format!("{}/api/v1/ca-certificate", cli.url);
+                let response = client
+                    .get(&url)
+                    .send()
+                    .await
+                    .context("Failed to send request")?;
 
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    anyhow::bail!("Request failed with status {}: {}", status, error_text);
+                }
+
+                let ca_cert = response
+                    .text()
+                    .await
+                    .context("Failed to read response body")?;
+
+                if let Some(output_path) = output {
+                    std::fs::write(&output_path, &ca_cert)
+                        .context("Failed to write CA certificate to file")?;
+                    println!("CA certificate saved to: {}", output_path.display());
+                } else {
+                    println!("{}", ca_cert);
+                }
+            }
+        },
         Commands::User(cmd) => match cmd {
             UserCommands::Create {
                 org,

@@ -35,6 +35,9 @@ All endpoints under `/api/*` require authentication:
 #### Public Endpoints
 
 - `GET /health` - Health check endpoint (no authentication required)
+- `GET /api/v1/ca-certificate` - CA certificate retrieval (no authentication required, only available when TLS is enabled)
+
+**Note:** The CA certificate endpoint is intentionally public because CA certificates are public information by design. It allows clients to dynamically fetch the CA certificate and establish secure LDAPS connections without using insecure mode.
 
 #### Error Responses
 
@@ -86,7 +89,7 @@ The LDAP server supports:
 ### Certificate Management
 
 For production:
-1. Use certificates from a trusted CA (e.g., Let's Encrypt)
+1. Use certificates from a trusted CA (e.g., Let's Encrypt, cert-manager)
 2. Rotate certificates before expiration
 3. Store private keys securely with restricted permissions
 
@@ -97,6 +100,30 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout key.pem -out cert.pem -days 365 \
   -subj "/CN=localhost"
 ```
+
+### Client Certificate Retrieval
+
+When TLS is enabled, clients can dynamically retrieve the CA certificate via the public endpoint:
+
+```bash
+# Retrieve CA certificate
+curl http://localhost:8080/api/v1/ca-certificate -o ca.pem
+
+# Use it for secure LDAPS connection
+ldapsearch -H ldaps://localhost:3389 -x \
+  -D "cn=user,ou=org,dc=example,dc=com" \
+  -w password \
+  -b "dc=example,dc=com" \
+  -o TLS_CACERT=ca.pem
+```
+
+This approach is more secure than using "insecure" mode (`-o TLS_REQCERT=never`) and doesn't require manual CA certificate distribution.
+
+**Workflow:**
+1. Client makes HTTP request to `/api/v1/ca-certificate`
+2. Server returns CA certificate in PEM format
+3. Client uses CA cert to verify server during LDAPS connection
+4. Secure authenticated connection established
 
 ## Security Best Practices
 

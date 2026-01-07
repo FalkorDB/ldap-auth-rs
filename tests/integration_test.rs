@@ -232,3 +232,117 @@ async fn test_health_check() {
 
     assert_eq!(response.status(), 200);
 }
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_ca_certificate_endpoint_tls_disabled() {
+    // Test that CA certificate endpoint returns error when TLS is disabled
+    std::env::remove_var("ENABLE_TLS");
+    std::env::remove_var("TLS_CERT_PATH");
+
+    let db = setup_test_db().await;
+    let app = api::create_router(db);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind");
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{}", addr);
+
+    let response = client
+        .get(format!("{}/api/v1/ca-certificate", base_url))
+        .send()
+        .await
+        .expect("Failed to get CA certificate");
+
+    assert_eq!(response.status(), 400); // Bad Request - TLS not enabled
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_ca_certificate_endpoint_tls_enabled() {
+    // Test that CA certificate endpoint returns certificate when TLS is enabled
+    use std::process::Command;
+
+    // Generate test certificate
+    let temp_dir = std::env::temp_dir();
+    let unique_id = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    );
+
+    let cert_path = temp_dir.join(format!("test-api-cert-{}.pem", unique_id));
+    let cert_path_str = cert_path.to_str().expect("Invalid UTF-8");
+
+    let result = Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            "/dev/null",
+            "-out",
+            cert_path_str,
+            "-days",
+            "1",
+            "-nodes",
+            "-subj",
+            "/CN=test.example.com",
+        ])
+        .output();
+
+    if !matches!(result, Ok(ref output) if output.status.success()) {
+        eprintln!("Skipping test: openssl not available");
+        return;
+    }
+
+    // Set environment variables
+    std::env::set_var("ENABLE_TLS", "true");
+    std::env::set_var("TLS_CERT_PATH", cert_path_str);
+
+    let db = setup_test_db().await;
+    let app = api::create_router(db);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind");
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let client = Client::new();
+    let base_url = format!("http://{}", addr);
+
+    let response = client
+        .get(format!("{}/api/v1/ca-certificate", base_url))
+        .send()
+        .await
+        .expect("Failed to get CA certificate");
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/x-pem-file"
+    );
+
+    let body = response.text().await.expect("Failed to read response body");
+    assert!(body.contains("-----BEGIN CERTIFICATE-----"));
+    assert!(body.contains("-----END CERTIFICATE-----"));
+
+    // Cleanup
+    std::fs::remove_file(cert_path_str).ok();
+    std::env::remove_var("ENABLE_TLS");
+    std::env::remove_var("TLS_CERT_PATH");
+}

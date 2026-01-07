@@ -32,6 +32,30 @@ The CLI can be configured using command-line flags or environment variables:
 ldap-auth-cli health
 ```
 
+### TLS Operations
+
+**Get CA Certificate:**
+
+Retrieve the CA certificate from the server (only when TLS is enabled). This is useful for establishing secure LDAPS connections without using insecure mode.
+
+```bash
+# Print CA certificate to stdout
+ldap-auth-cli tls get-ca-cert
+
+# Save CA certificate to a file
+ldap-auth-cli tls get-ca-cert --output ca.pem
+
+# Use the CA certificate with ldapsearch
+ldap-auth-cli tls get-ca-cert -o ca.pem
+ldapsearch -H ldaps://localhost:3389 -x \
+  -D "cn=alice,ou=myorg,dc=example,dc=com" \
+  -w password123 \
+  -b "dc=example,dc=com" \
+  -o TLS_CACERT=ca.pem
+```
+
+**Note:** This command will fail with an error if TLS is not enabled on the server.
+
 ### User Management
 
 **Create a user:**

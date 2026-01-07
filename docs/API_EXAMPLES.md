@@ -161,6 +161,29 @@ conn.unbind()
 curl http://localhost:8080/health
 ```
 
+## TLS Operations
+
+### Get CA Certificate
+
+Retrieve the CA certificate from the server when TLS is enabled. This allows clients to trust the server's certificate without using insecure mode.
+
+```bash
+# Get CA certificate to stdout
+curl http://localhost:8080/api/v1/ca-certificate
+
+# Save CA certificate to file
+curl http://localhost:8080/api/v1/ca-certificate -o ca.pem
+
+# Use the CA certificate with ldapsearch
+ldapsearch -H ldaps://localhost:3389 -x \
+  -D "cn=alice,ou=acme,dc=example,dc=com" \
+  -w pass123 \
+  -b "dc=example,dc=com" \
+  -o TLS_CACERT=ca.pem
+```
+
+**Note:** This endpoint returns a 400 error if TLS is not enabled on the server.
+
 ## Complete Workflow Example
 
 ```bash

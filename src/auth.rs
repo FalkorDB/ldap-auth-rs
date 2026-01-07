@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use once_cell::sync::Lazy;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// Cached bearer token loaded at startup
 /// Note: This is lazily initialized on first use, so test can set env var before first request

@@ -11,12 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
-use tracing::{info, instrument, Instrument};
+use tracing::{debug, instrument, Instrument};
 
 use crate::auth::validate_bearer_token;
+use crate::config::Config;
 use crate::db::DbService;
 use crate::error::AppError;
 use crate::models::{GroupCreate, GroupUpdate, UserCreate, UserResponse, UserUpdate};
+use crate::tls;
 use uuid::Uuid;
 
 /// Middleware to add request ID to all requests
@@ -249,6 +251,30 @@ async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, A
     Ok((http_status, Json(ApiResponse::success(health))))
 }
 
+/// Get CA certificate endpoint
+/// Returns the CA certificate in PEM format if TLS is enabled
+async fn get_ca_certificate() -> Result<impl IntoResponse, AppError> {
+    let config = Config::from_env();
+
+    if !config.enable_tls {
+        return Err(AppError::InvalidInput(
+            "TLS is not enabled on this server".to_string(),
+        ));
+    }
+
+    let cert_path = config
+        .tls_cert_path
+        .ok_or_else(|| AppError::Internal("TLS_CERT_PATH not configured".to_string()))?;
+
+    let ca_cert = tls::extract_ca_certificate(&cert_path)?;
+
+    Ok((
+        StatusCode::OK,
+        [("content-type", "application/x-pem-file")],
+        ca_cert,
+    ))
+}
+
 /// Create the API router with bearer token authentication
 pub fn create_router(db: Arc<dyn DbService>) -> Router {
     // Protected routes that require authentication
@@ -277,6 +303,7 @@ pub fn create_router(db: Arc<dyn DbService>) -> Router {
     let (prometheus_layer, prometheus_handle) = crate::metrics::get_prometheus_layer();
     Router::new()
         .route("/health", get(health_check))
+        .route("/api/v1/ca-certificate", get(get_ca_certificate))
         .route(
             "/metrics",
             get(move || async move { prometheus_handle.render() }),
