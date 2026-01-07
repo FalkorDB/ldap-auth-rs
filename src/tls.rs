@@ -1,6 +1,6 @@
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
-use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
@@ -24,20 +24,37 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
     }
 
     // Load private key
-    let key_file = File::open(key_path)
-        .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
-    let mut key_reader = BufReader::new(key_file);
-    let mut keys = pkcs8_private_keys(&mut key_reader)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?;
+    // cert-manager commonly emits RSA keys in PKCS#1 (tls.key) when `privateKey.encoding=PKCS1`.
+    // rustls supports PKCS#1 and PKCS#8, so we accept either.
+    let mut pkcs8_keys = {
+        let key_file = File::open(key_path)
+            .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
+        let mut key_reader = BufReader::new(key_file);
+        pkcs8_private_keys(&mut key_reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?
+    };
 
-    if keys.is_empty() {
-        return Err(AppError::Internal(
-            "No private keys found in file".to_string(),
-        ));
-    }
+    let key = if let Some(key) = pkcs8_keys.pop() {
+        PrivateKeyDer::Pkcs8(key)
+    } else {
+        let mut rsa_keys = {
+            let key_file = File::open(key_path)
+                .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
+            let mut key_reader = BufReader::new(key_file);
+            rsa_private_keys(&mut key_reader)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?
+        };
 
-    let key = PrivateKeyDer::Pkcs8(keys.remove(0));
+        if rsa_keys.is_empty() {
+            return Err(AppError::Internal(
+                "No private keys found in file (expected PKCS#8 or PKCS#1 PEM)".to_string(),
+            ));
+        }
+
+        PrivateKeyDer::Pkcs1(rsa_keys.remove(0))
+    };
 
     // Build TLS config
     let config = ServerConfig::builder()
@@ -115,6 +132,7 @@ pub fn generate_test_certs() -> Result<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn test_generate_test_certs() {
@@ -148,5 +166,101 @@ mod tests {
     fn test_load_tls_config_missing_files() {
         let result = load_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_tls_config_with_pkcs1_key() {
+        // This test requires openssl to be installed.
+        // It mimics cert-manager when `privateKey.encoding=PKCS1` (RSA PRIVATE KEY).
+        let temp_dir = std::env::temp_dir();
+        let unique_id = format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("System clock is set before UNIX epoch - this should never happen")
+                .as_nanos(),
+            rand::random::<u32>()
+        );
+
+        let key_path = temp_dir.join(format!("test-pkcs1-key-{}.pem", unique_id));
+        let cert_path = temp_dir.join(format!("test-pkcs1-cert-{}.pem", unique_id));
+
+        let key_path_str = key_path
+            .to_str()
+            .expect("Invalid UTF-8 in generated key path")
+            .to_string();
+        let cert_path_str = cert_path
+            .to_str()
+            .expect("Invalid UTF-8 in generated cert path")
+            .to_string();
+
+        // Generate a PKCS#1 RSA private key.
+        let key_out = Command::new("openssl")
+            .args(["genrsa", "-out", &key_path_str, "2048"])
+            .output();
+
+        match key_out {
+            Ok(result) if result.status.success() => {}
+            Ok(result) => {
+                eprintln!(
+                    "Warning: openssl genrsa failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("Warning: openssl not available: {}", e);
+                return;
+            }
+        }
+
+        // Generate a self-signed cert using that key.
+        let cert_out = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-new",
+                "-key",
+                &key_path_str,
+                "-out",
+                &cert_path_str,
+                "-days",
+                "1",
+                "-subj",
+                "/CN=localhost",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+                "-addext",
+                "basicConstraints=CA:FALSE",
+            ])
+            .output();
+
+        match cert_out {
+            Ok(result) if result.status.success() => {}
+            Ok(result) => {
+                eprintln!(
+                    "Warning: openssl req failed: {}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                let _ = std::fs::remove_file(&key_path_str);
+                return;
+            }
+            Err(e) => {
+                eprintln!("Warning: openssl not available: {}", e);
+                let _ = std::fs::remove_file(&key_path_str);
+                return;
+            }
+        }
+
+        let config_result = load_tls_config(&cert_path_str, &key_path_str);
+        assert!(
+            config_result.is_ok(),
+            "Expected PKCS#1 key to be accepted, got: {:?}",
+            config_result.err()
+        );
+
+        // Cleanup
+        std::fs::remove_file(cert_path_str).ok();
+        std::fs::remove_file(key_path_str).ok();
     }
 }
