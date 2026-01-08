@@ -48,6 +48,11 @@
 //! - Anonymous bind allowed but search returns empty results unless authorized
 //! - `search_bind_org` configuration restricts search to specific organization
 //! - TLS strongly recommended for production (use `run_with_tls`)
+//!
+//! ## TLS Connection Handling
+//! - Gracefully handles improper TLS connection closures (missing `close_notify` alerts)
+//! - Many LDAP clients/servers don't follow RFC-compliant TLS shutdown procedures
+//! - Such closures are logged at debug level but don't trigger errors
 
 use rustls::ServerConfig;
 use std::sync::Arc;
@@ -336,6 +341,18 @@ async fn handle_connection(
     }
 }
 
+/// Helper function to check if a TLS error is due to improper connection closure
+/// Many LDAP clients/servers don't send close_notify alerts, which is not critical
+fn is_benign_tls_closure_error(error: &std::io::Error) -> bool {
+    let error_msg = error.to_string().to_lowercase();
+    error_msg.contains("closenotify")
+        || error_msg.contains("close_notify")
+        || error_msg.contains("peer closed connection without sending tls close_notify")
+        || error_msg.contains("unexpectedeof")
+        || error_msg.contains("connection reset")
+        || error_msg.contains("broken pipe")
+}
+
 async fn handle_tls_connection(
     mut socket: tokio_rustls::server::TlsStream<TcpStream>,
     db: Arc<dyn DbService>,
@@ -352,9 +369,20 @@ async fn handle_tls_connection(
     let mut authenticated_org: Option<String> = None;
 
     loop {
-        let n = socket.read(&mut buffer).await.map_err(|e| {
-            crate::error::AppError::Internal(format!("Failed to read from TLS socket: {}", e))
-        })?;
+        let n = match socket.read(&mut buffer).await {
+            Ok(n) => n,
+            Err(e) => {
+                // Handle TLS close_notify gracefully - some LDAP clients don't send it
+                if is_benign_tls_closure_error(&e) {
+                    debug!("Client closed TLS connection (no close_notify): {}", e);
+                    return Ok(());
+                }
+                return Err(crate::error::AppError::Internal(format!(
+                    "Failed to read from TLS socket: {}",
+                    e
+                )));
+            }
+        };
 
         if n == 0 {
             debug!("Client disconnected");
@@ -382,18 +410,26 @@ async fn handle_tls_connection(
                         )
                         .await;
 
-                        socket.write_all(&response).await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                        if let Err(e) = socket.write_all(&response).await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during write");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to write TLS response: {}",
                                 e
-                            ))
-                        })?;
-                        socket.flush().await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                            )));
+                        }
+                        if let Err(e) = socket.flush().await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during flush");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to flush TLS socket: {}",
                                 e
-                            ))
-                        })?;
+                            )));
+                        }
                     }
                     2 => {
                         // Unbind Request
@@ -420,18 +456,26 @@ async fn handle_tls_connection(
                                 messages.len(),
                                 message.len()
                             );
-                            socket.write_all(message).await.map_err(|e| {
-                                crate::error::AppError::Internal(format!(
+                            if let Err(e) = socket.write_all(message).await {
+                                if is_benign_tls_closure_error(&e) {
+                                    debug!("Client disconnected during write");
+                                    return Ok(());
+                                }
+                                return Err(crate::error::AppError::Internal(format!(
                                     "Failed to write TLS search message: {}",
                                     e
-                                ))
-                            })?;
-                            socket.flush().await.map_err(|e| {
-                                crate::error::AppError::Internal(format!(
+                                )));
+                            }
+                            if let Err(e) = socket.flush().await {
+                                if is_benign_tls_closure_error(&e) {
+                                    debug!("Client disconnected during flush");
+                                    return Ok(());
+                                }
+                                return Err(crate::error::AppError::Internal(format!(
                                     "Failed to flush after TLS search message: {}",
                                     e
-                                ))
-                            })?;
+                                )));
+                            }
                         }
                     }
                     23 => {
@@ -444,18 +488,26 @@ async fn handle_tls_connection(
                         )
                         .await;
 
-                        socket.write_all(&response).await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                        if let Err(e) = socket.write_all(&response).await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during write");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to write TLS response: {}",
                                 e
-                            ))
-                        })?;
-                        socket.flush().await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                            )));
+                        }
+                        if let Err(e) = socket.flush().await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during flush");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to flush TLS socket: {}",
                                 e
-                            ))
-                        })?;
+                            )));
+                        }
                     }
                     _ => {
                         warn!("Unsupported LDAP operation: {}", op_type);
@@ -464,18 +516,26 @@ async fn handle_tls_connection(
                             1,
                             LdapResultCode::OperationsError as u8,
                         );
-                        socket.write_all(&response).await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                        if let Err(e) = socket.write_all(&response).await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during write");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to write TLS response: {}",
                                 e
-                            ))
-                        })?;
-                        socket.flush().await.map_err(|e| {
-                            crate::error::AppError::Internal(format!(
+                            )));
+                        }
+                        if let Err(e) = socket.flush().await {
+                            if is_benign_tls_closure_error(&e) {
+                                debug!("Client disconnected during flush");
+                                return Ok(());
+                            }
+                            return Err(crate::error::AppError::Internal(format!(
                                 "Failed to flush TLS socket: {}",
                                 e
-                            ))
-                        })?;
+                            )));
+                        }
                     }
                 }
             }
@@ -483,12 +543,26 @@ async fn handle_tls_connection(
                 error!("Failed to parse LDAP message: {}", e);
                 let error_response =
                     create_error_response(1, 1, LdapResultCode::ProtocolError as u8);
-                socket.write_all(&error_response).await.map_err(|e| {
-                    crate::error::AppError::Internal(format!("Failed to write TLS error: {}", e))
-                })?;
-                socket.flush().await.map_err(|e| {
-                    crate::error::AppError::Internal(format!("Failed to flush TLS socket: {}", e))
-                })?;
+                if let Err(e) = socket.write_all(&error_response).await {
+                    if is_benign_tls_closure_error(&e) {
+                        debug!("Client disconnected during write");
+                        return Ok(());
+                    }
+                    return Err(crate::error::AppError::Internal(format!(
+                        "Failed to write TLS error: {}",
+                        e
+                    )));
+                }
+                if let Err(e) = socket.flush().await {
+                    if is_benign_tls_closure_error(&e) {
+                        debug!("Client disconnected during flush");
+                        return Ok(());
+                    }
+                    return Err(crate::error::AppError::Internal(format!(
+                        "Failed to flush TLS socket: {}",
+                        e
+                    )));
+                }
             }
         }
     }
