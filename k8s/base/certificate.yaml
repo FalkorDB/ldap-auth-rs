@@ -20,6 +20,7 @@ spec:
     - server auth
     - client auth
   dnsNames:
+    - localhost
     - ldap-auth-service
     - ldap-auth-service.ldap-auth
     - ldap-auth-service.ldap-auth.svc

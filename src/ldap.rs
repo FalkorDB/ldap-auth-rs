@@ -573,7 +573,7 @@ async fn handle_tls_connection(
 /// - cn=username,ou=organization,dc=example,dc=com
 /// - cn=username,dc=domain,dc=tld (uses first DC as organization)
 ///   Accepts both lowercase (cn=, ou=, dc=) and uppercase (CN=, OU=, DC=) prefixes
-fn parse_dn(dn: &str) -> Option<(String, String)> {
+pub fn parse_dn(dn: &str) -> Option<(String, String)> {
     let parts: Vec<&str> = dn.split(',').collect();
     if parts.len() < 2 {
         return None;
@@ -858,19 +858,24 @@ async fn handle_search_request(
     );
 
     // Simple approach: search for group-related strings in the entire payload
-    let payload_str = String::from_utf8_lossy(payload).to_lowercase();
-    debug!("Payload string (lowercase): {}", payload_str);
+    let payload_str = String::from_utf8_lossy(payload).to_string();
+    let payload_str_lower = payload_str.to_lowercase();
+    debug!(
+        "Payload string (first 200 chars): {}",
+        &payload_str[..std::cmp::min(200, payload_str.len())]
+    );
 
-    // Check if this is a group search
-    let is_group_search = payload_str.contains("groupofnames")
-        || payload_str.contains("groupofuniquenames")
-        || payload_str.contains("posixgroup");
+    // Check if this is a group search (case-insensitive for LDAP keywords)
+    let is_group_search = payload_str_lower.contains("groupofnames")
+        || payload_str_lower.contains("groupofuniquenames")
+        || payload_str_lower.contains("posixgroup");
 
     // Check if searching for groups a specific user is member of
     // In LDAP BER encoding, the filter might have the pattern differently
     // Try multiple patterns: "member=cn=", "member" followed by "cn="
     // Extract both username and organization from the member DN
-    let member_search = extract_member_info(&payload_str);
+    // Pass both original (for values) and lowercase (for keywords) versions
+    let member_search = extract_member_info(&payload_str, &payload_str_lower);
     debug!("Member search result: {:?}", member_search);
 
     // Per LDAP standards: if a search_bind_org is configured, only authenticated users
@@ -949,7 +954,7 @@ async fn handle_search_request(
                             &group.members,
                             requested_attrs.as_deref(),
                         );
-                        info!(
+                        debug!(
                             "Group entry response - DN: '{}', size: {} bytes, first 20 bytes: {:02x?}",
                             dn,
                             entry_response.len(),
@@ -1217,13 +1222,14 @@ fn parse_search_attributes(payload: &[u8]) -> Option<Vec<String>> {
     None
 }
 
-fn extract_member_info(payload_str: &str) -> Option<(String, String)> {
+pub fn extract_member_info(payload_str: &str, payload_str_lower: &str) -> Option<(String, String)> {
     // Extract username and organization from "member=cn=<username>,ou=<org>,..." pattern
     // Returns (organization, username)
     // Try different patterns as LDAP BER encoding might separate them
+    // Use lowercase version for pattern matching, but extract values from original to preserve case
 
     // Pattern 1: Direct "member=cn=" (most common)
-    if let Some(start) = payload_str.find("member=cn=") {
+    if let Some(start) = payload_str_lower.find("member=cn=") {
         let after_member = &payload_str[start + 10..]; // Skip "member=cn="
         if let Some(cn_end) = after_member.find(',') {
             let username = after_member[..cn_end].to_string();
@@ -1241,10 +1247,13 @@ fn extract_member_info(payload_str: &str) -> Option<(String, String)> {
 
     // Pattern 2: "member" followed by "cn=" with possible separators
     // In BER encoding, attribute name and value might be separated
-    if let Some(member_pos) = payload_str.find("member") {
-        let after_member = &payload_str[member_pos + 6..]; // Skip "member"
-        if let Some(cn_pos) = after_member.find("cn=") {
-            let after_cn = &after_member[cn_pos + 3..]; // Skip "cn="
+    if let Some(member_pos) = payload_str_lower.find("member") {
+        // Use lowercase for pattern matching but extract from original to preserve case
+        let after_member_lower = &payload_str_lower[member_pos + 6..]; // Skip "member"
+        let after_member = &payload_str[member_pos + 6..];
+
+        if let Some(cn_pos) = after_member_lower.find("cn=") {
+            let after_cn = &after_member[cn_pos + 3..]; // Skip "cn=", extract from original
             if let Some(cn_end) = after_cn.find(',') {
                 let username = after_cn[..cn_end].to_string();
                 // Look for ou= or dc= for organization
@@ -1264,11 +1273,14 @@ fn extract_member_info(payload_str: &str) -> Option<(String, String)> {
     None
 }
 
-fn extract_org_from_dn(dn_part: &str) -> Option<String> {
+pub fn extract_org_from_dn(dn_part: &str) -> Option<String> {
     // Extract organization from "ou=<org>,..." or "dc=<org>,..." pattern
+    // Case-insensitive for LDAP keywords (ou=, dc=) but preserve case of values
+    let dn_lower = dn_part.to_lowercase();
+
     // Prefer ou= over dc=
-    if let Some(ou_pos) = dn_part.find("ou=") {
-        let after_ou = &dn_part[ou_pos + 3..]; // Skip "ou="
+    if let Some(ou_pos) = dn_lower.find("ou=") {
+        let after_ou = &dn_part[ou_pos + 3..]; // Skip "ou=", extract from original to preserve case
         if let Some(end) = after_ou.find(',') {
             return Some(after_ou[..end].to_string());
         } else {
@@ -1278,8 +1290,8 @@ fn extract_org_from_dn(dn_part: &str) -> Option<String> {
     }
 
     // Fall back to first dc= if no ou=
-    if let Some(dc_pos) = dn_part.find("dc=") {
-        let after_dc = &dn_part[dc_pos + 3..]; // Skip "dc="
+    if let Some(dc_pos) = dn_lower.find("dc=") {
+        let after_dc = &dn_part[dc_pos + 3..]; // Skip "dc=", extract from original to preserve case
         if let Some(end) = after_dc.find(',') {
             return Some(after_dc[..end].to_string());
         } else {
@@ -1834,7 +1846,8 @@ mod tests {
         // Pattern 1: Direct "member=cn=username,ou=org,..."
         let payload =
             "(&(objectclass=groupofnames)(member=cn=testuser,ou=testorg,dc=example,dc=com))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         assert_eq!(
             result,
             Some(("testorg".to_string(), "testuser".to_string()))
@@ -1846,7 +1859,8 @@ mod tests {
         // Pattern 2: "member" followed by "cn=" with separators (BER encoding)
         // Simulating BER-encoded payload where attribute and value are separated
         let payload = "(&(objectclass=groupofnames)(member\x00\x04cn=falkordb,ou=instance-1,dc=falkordb,dc=cloud))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         assert_eq!(
             result,
             Some(("instance-1".to_string(), "falkordb".to_string()))
@@ -1857,7 +1871,8 @@ mod tests {
     fn test_extract_member_info_no_match() {
         // No member filter present
         let payload = "(&(objectclass=groupofnames)(cn=testgroup))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         assert_eq!(result, None);
     }
 
@@ -1866,7 +1881,8 @@ mod tests {
         // Test case sensitivity - in handle_search_request, payload is lowercased before extraction
         // So simulate what the function receives
         let payload = "(&(objectclass=groupofnames)(member=cn=username,ou=org,dc=example,dc=com))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         assert_eq!(result, Some(("org".to_string(), "username".to_string())));
     }
 
@@ -1874,7 +1890,8 @@ mod tests {
     fn test_extract_member_info_no_comma() {
         // Member filter without comma after username (invalid format)
         let payload = "(&(objectclass=groupofnames)(member=cn=testuser))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         // Should return None since there's no org info
         assert_eq!(result, None);
     }
@@ -1883,7 +1900,8 @@ mod tests {
     fn test_extract_member_info_dc_only() {
         // Test with dc= only (no ou=) - should use first dc as org
         let payload = "(&(objectclass=groupofnames)(member=cn=user,dc=example,dc=com))";
-        let result = extract_member_info(payload);
+        let payload_lower = payload.to_lowercase();
+        let result = extract_member_info(payload, &payload_lower);
         assert_eq!(result, Some(("example".to_string(), "user".to_string())));
     }
 
