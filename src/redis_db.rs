@@ -214,12 +214,26 @@ impl DbService for RedisDbService {
             )));
         }
 
-        // Remove from all groups
-        let groups = self.get_user_groups(organization, username).await?;
-        for group in groups {
-            let _ = self
-                .remove_user_from_group(organization, &group.name, username)
-                .await;
+        // Get user's groups before deletion
+        let user_groups_key = Self::user_groups_key(organization, username);
+        let group_names: Vec<String> = conn.smembers(&user_groups_key).await?;
+
+        // Remove user from all groups efficiently using the same connection
+        for group_name in &group_names {
+            let group_key = Self::group_key(organization, group_name);
+
+            // Get group
+            if let Ok(group_json) = conn.get::<_, String>(&group_key).await {
+                if let Ok(mut group) = serde_json::from_str::<crate::models::Group>(&group_json) {
+                    // Remove user from group
+                    if group.remove_member(username) {
+                        // Save updated group
+                        if let Ok(updated_json) = serde_json::to_string(&group) {
+                            let _ = conn.set::<_, _, ()>(&group_key, updated_json).await;
+                        }
+                    }
+                }
+            }
         }
 
         // Delete user
@@ -230,7 +244,6 @@ impl DbService for RedisDbService {
         conn.srem::<_, _, ()>(&org_users_key, username).await?;
 
         // Remove user's groups set
-        let user_groups_key = Self::user_groups_key(organization, username);
         conn.del::<_, ()>(&user_groups_key).await?;
 
         Ok(())
