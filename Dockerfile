@@ -37,7 +37,7 @@ RUN cargo build --release
 RUN cargo build --release --bin ldap-auth-cli
 
 # Runtime stage - Using Alpine for minimal size and security
-FROM alpine:3.21
+FROM alpine:3.23
 
 WORKDIR /app
 
