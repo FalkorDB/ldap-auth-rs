@@ -1,0 +1,29 @@
+name: Spellcheck
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  spellcheck:
+    name: Spellcheck
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check spelling
+        uses: crate-ci/typos@master
+        with:
+          files: |
+            ./src
+            ./tests
+            ./docs
+            ./README.md
+            ./CONTRIBUTING.md
+            ./ARCHITECTURE.md
+          config: ./.typos.toml

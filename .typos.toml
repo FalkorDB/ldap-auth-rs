@@ -1,0 +1,56 @@
+[default]
+extend-ignore-re = [
+  # Ignore hex strings
+  "[0-9a-fA-F]{8,}",
+  # Ignore UUIDs
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+]
+
+[default.extend-words]
+# Technical terms and abbreviations
+LDAP = "LDAP"
+DN = "DN"
+dn = "dn"
+ou = "ou"
+cn = "cn"
+uid = "uid"
+gid = "gid"
+Redis = "Redis"
+Vec = "Vec"
+hashmap = "hashmap"
+serialization = "serialization"
+
+# Rust-specific terms
+tokio = "tokio"
+async = "async"
+rustfmt = "rustfmt"
+clippy = "clippy"
+serde = "serde"
+redis = "redis"
+axum = "axum"
+tls = "tls"
+bindgen = "bindgen"
+
+# Project-specific terms
+FalkorDB = "FalkorDB"
+ldap-auth-rs = "ldap-auth-rs"
+SASL = "SASL"
+TLS = "TLS"
+
+[files]
+extend-exclude = [
+  "*.lock",
+  "*.rdb",
+  "target/",
+  ".git/",
+  "dump.rdb",
+]
+
+[type.rust]
+extend-glob = ["*.rs"]
+
+[type.markdown]
+extend-glob = ["*.md"]
+
+[type.yaml]
+extend-glob = ["*.yml", "*.yaml"]
