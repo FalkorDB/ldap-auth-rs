@@ -7,7 +7,7 @@ description = "Lightweight Rust-based LDAP authentication service with REST API 
 
 [dependencies]
 # Web framework
-axum = "0.7"
+axum = "0.8"
 axum-extra = { version = "0.9", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower = "0.5"
