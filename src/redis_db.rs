@@ -117,6 +117,10 @@ impl RedisDbService {
 #[async_trait]
 impl DbService for RedisDbService {
     async fn create_user(&self, user: UserCreate) -> Result<User> {
+        info!(
+            "Creating user: organization={}, username={}",
+            user.organization, user.username
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::user_key(&user.organization, &user.username);
 
@@ -150,10 +154,18 @@ impl DbService for RedisDbService {
         conn.sadd::<_, _, ()>(&org_users_key, &user.username)
             .await?;
 
+        info!(
+            "Successfully created user: organization={}, username={}",
+            new_user.organization, new_user.username
+        );
         Ok(new_user)
     }
 
     async fn get_user(&self, organization: &str, username: &str) -> Result<User> {
+        info!(
+            "Getting user: organization={}, username={}",
+            organization, username
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::user_key(organization, username);
 
@@ -176,6 +188,12 @@ impl DbService for RedisDbService {
         username: &str,
         update: UserUpdate,
     ) -> Result<User> {
+        info!(
+            "Updating user: organization={}, username={}, updating_password={}",
+            organization,
+            username,
+            update.password.is_some()
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::user_key(organization, username);
 
@@ -198,10 +216,18 @@ impl DbService for RedisDbService {
         let user_json = serde_json::to_string(&user)?;
         conn.set::<_, _, ()>(&key, user_json).await?;
 
+        info!(
+            "Successfully updated user: organization={}, username={}",
+            user.organization, user.username
+        );
         Ok(user)
     }
 
     async fn delete_user(&self, organization: &str, username: &str) -> Result<()> {
+        info!(
+            "Deleting user: organization={}, username={}",
+            organization, username
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::user_key(organization, username);
 
@@ -246,10 +272,15 @@ impl DbService for RedisDbService {
         // Remove user's groups set
         conn.del::<_, ()>(&user_groups_key).await?;
 
+        info!(
+            "Successfully deleted user: organization={}, username={}",
+            organization, username
+        );
         Ok(())
     }
 
     async fn list_users(&self, organization: &str) -> Result<Vec<User>> {
+        info!("Listing users: organization={}", organization);
         let mut conn = self.pool.get().await?;
         let org_users_key = Self::org_users_key(organization);
 
@@ -259,9 +290,19 @@ impl DbService for RedisDbService {
         for username in usernames {
             if let Ok(user) = self.get_user(organization, &username).await {
                 users.push(user);
+            } else {
+                warn!(
+                    "User {} listed in organization {} but not found in database",
+                    username, organization
+                );
             }
         }
 
+        info!(
+            "Successfully listed {} users: organization={}",
+            users.len(),
+            organization
+        );
         Ok(users)
     }
 
@@ -271,11 +312,20 @@ impl DbService for RedisDbService {
         username: &str,
         password: &str,
     ) -> Result<bool> {
+        info!(
+            "Verifying user password: organization={}, username={}",
+            organization, username
+        );
         let user = self.get_user(organization, username).await?;
-        verify_password(password, &user.password_hash)
+        let result = verify_password(password, &user.password_hash)?;
+        Ok(result)
     }
 
     async fn create_group(&self, group: GroupCreate) -> Result<Group> {
+        info!(
+            "Creating group: organization={}, name={}, description={:?}",
+            group.organization, group.name, group.description
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::group_key(&group.organization, &group.name);
 
@@ -300,10 +350,18 @@ impl DbService for RedisDbService {
         let org_groups_key = Self::org_groups_key(&group.organization);
         conn.sadd::<_, _, ()>(&org_groups_key, &group.name).await?;
 
+        info!(
+            "Successfully created group: organization={}, name={}",
+            new_group.organization, new_group.name
+        );
         Ok(new_group)
     }
 
     async fn get_group(&self, organization: &str, name: &str) -> Result<Group> {
+        info!(
+            "Getting group: organization={}, name={}",
+            organization, name
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::group_key(organization, name);
 
@@ -326,6 +384,10 @@ impl DbService for RedisDbService {
         name: &str,
         update: GroupUpdate,
     ) -> Result<Group> {
+        info!(
+            "Updating group: organization={}, name={}, description={:?}",
+            organization, name, update.description
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::group_key(organization, name);
 
@@ -342,10 +404,18 @@ impl DbService for RedisDbService {
         let group_json = serde_json::to_string(&group)?;
         conn.set::<_, _, ()>(&key, group_json).await?;
 
+        info!(
+            "Successfully updated group: organization={}, name={}",
+            group.organization, group.name
+        );
         Ok(group)
     }
 
     async fn delete_group(&self, organization: &str, name: &str) -> Result<()> {
+        info!(
+            "Deleting group: organization={}, name={}",
+            organization, name
+        );
         let mut conn = self.pool.get().await?;
         let key = Self::group_key(organization, name);
 
@@ -365,10 +435,15 @@ impl DbService for RedisDbService {
         let org_groups_key = Self::org_groups_key(organization);
         conn.srem::<_, _, ()>(&org_groups_key, name).await?;
 
+        info!(
+            "Successfully deleted group: organization={}, name={}",
+            organization, name
+        );
         Ok(())
     }
 
     async fn list_groups(&self, organization: &str) -> Result<Vec<Group>> {
+        info!("Listing groups: organization={}", organization);
         let mut conn = self.pool.get().await?;
         let org_groups_key = Self::org_groups_key(organization);
 
@@ -390,6 +465,10 @@ impl DbService for RedisDbService {
         group_name: &str,
         username: &str,
     ) -> Result<Group> {
+        info!(
+            "Adding user to group: organization={}, group={}, username={}",
+            organization, group_name, username
+        );
         let mut conn = self.pool.get().await?;
 
         // Verify user exists
@@ -415,6 +494,10 @@ impl DbService for RedisDbService {
         let user_groups_key = Self::user_groups_key(organization, username);
         conn.sadd::<_, _, ()>(&user_groups_key, group_name).await?;
 
+        info!(
+            "Successfully added user to group: organization={}, group={}, username={}",
+            organization, group_name, username
+        );
         Ok(group)
     }
 
@@ -424,6 +507,10 @@ impl DbService for RedisDbService {
         group_name: &str,
         username: &str,
     ) -> Result<Group> {
+        info!(
+            "Removing user from group: organization={}, group={}, username={}",
+            organization, group_name, username
+        );
         let mut conn = self.pool.get().await?;
 
         // Get group
@@ -446,10 +533,18 @@ impl DbService for RedisDbService {
         let user_groups_key = Self::user_groups_key(organization, username);
         conn.srem::<_, _, ()>(&user_groups_key, group_name).await?;
 
+        info!(
+            "Successfully removed user from group: organization={}, group={}, username={}",
+            organization, group_name, username
+        );
         Ok(group)
     }
 
     async fn get_user_groups(&self, organization: &str, username: &str) -> Result<Vec<Group>> {
+        info!(
+            "Getting user groups: organization={}, username={}",
+            organization, username
+        );
         let mut conn = self.pool.get().await?;
         let user_groups_key = Self::user_groups_key(organization, username);
 
@@ -462,10 +557,20 @@ impl DbService for RedisDbService {
             }
         }
 
+        info!(
+            "Successfully retrieved {} groups for user: organization={}, username={}",
+            groups.len(),
+            organization,
+            username
+        );
         Ok(groups)
     }
 
     async fn search_users(&self, organization: &str, filter: &str) -> Result<Vec<User>> {
+        info!(
+            "Searching users: organization={}, filter={}",
+            organization, filter
+        );
         // Simple implementation: list all users and filter by username or email
         let users = self.list_users(organization).await?;
 
@@ -478,10 +583,20 @@ impl DbService for RedisDbService {
             })
             .collect();
 
+        info!(
+            "Search users completed: organization={}, filter={}, results={}",
+            organization,
+            filter,
+            filtered.len()
+        );
         Ok(filtered)
     }
 
     async fn search_groups(&self, organization: &str, filter: &str) -> Result<Vec<Group>> {
+        info!(
+            "Searching groups: organization={}, filter={}",
+            organization, filter
+        );
         // Simple implementation: list all groups and filter by name or description
         let groups = self.list_groups(organization).await?;
 
@@ -493,13 +608,22 @@ impl DbService for RedisDbService {
             })
             .collect();
 
+        info!(
+            "Search groups completed: organization={}, filter={}, results={}",
+            organization,
+            filter,
+            filtered.len()
+        );
         Ok(filtered)
     }
 
     async fn health_check(&self) -> Result<bool> {
+        info!("Performing database health check");
         let mut conn = self.pool.get().await?;
         let result: redis::RedisResult<String> = redis::cmd("PING").query_async(&mut conn).await;
-        Ok(result.is_ok())
+        let is_healthy = result.is_ok();
+        info!("Database health check result: {}", is_healthy);
+        Ok(is_healthy)
     }
 }
 

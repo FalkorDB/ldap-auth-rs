@@ -1156,7 +1156,7 @@ fn parse_search_attributes(payload: &[u8]) -> Option<Vec<String>> {
 
     // For simplicity, search for the attributes SEQUENCE (0x30) near the end
     // The attributes list is the last element in SearchRequest
-    // Look for pattern: SEQUENCE of OCTET STRINGs
+    // Look for pattern: SEQUENCE of OCTET STRING values
     let mut attrs = Vec::new();
 
     // Scan backwards from end to find the last SEQUENCE
@@ -1185,7 +1185,7 @@ fn parse_search_attributes(payload: &[u8]) -> Option<Vec<String>> {
                 continue;
             }
 
-            // Parse OCTET STRINGs
+            // Parse OCTET STRING values
             while attr_pos < seq_end && attr_pos < payload.len() {
                 if payload[attr_pos] == 0x04 {
                     // OCTET STRING

@@ -3,6 +3,8 @@
 A production-ready, lightweight Rust-based LDAP authentication service with REST API and Redis backend.
 
 [![CI/CD Pipeline](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/ci-cd.yml)
+[![Spellcheck](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/spellcheck.yml/badge.svg)](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/spellcheck.yml)
+[![codecov](https://codecov.io/gh/FalkorDB/ldap-auth-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/FalkorDB/ldap-auth-rs)
 [![Tests](https://img.shields.io/badge/tests-47%20passing-brightgreen)](https://github.com/FalkorDB/ldap-auth-rs/actions)
 [![Production Ready](https://img.shields.io/badge/production-ready-blue)](docs/DEPLOYMENT.md)
 
