@@ -62,7 +62,7 @@ urlencoding = "2.1.3"
 
 [dev-dependencies]
 # Testing
-mockall = "0.12"
+mockall = "0.14"
 testcontainers = "0.15"
 reqwest = { version = "0.13", features = ["json"] }
 tokio-test = "0.4"
