@@ -48,7 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Metrics
 prometheus = "0.14"
-axum-prometheus = "0.6"
+axum-prometheus = "0.10"
 
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }
