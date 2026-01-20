@@ -29,7 +29,7 @@ serde_json = "1.0"
 
 # Redis
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
-deadpool-redis = "0.15"
+deadpool-redis = "0.22"
 
 # LDAP (we'll implement a basic LDAP server using tokio)
 ldap3 = "0.11"
