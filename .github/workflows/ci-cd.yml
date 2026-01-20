@@ -297,7 +297,7 @@ jobs:
         run: cargo audit
 
       - name: Run vulnerability scan with Trivy
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -473,7 +473,7 @@ jobs:
           CLI_CMD="docker run --rm --network host --entrypoint ldap-auth-cli ${{ env.IMAGE_NAME }}:latest" ./tests/cli_sanity_test.sh
 
       - name: Scan Docker image with Trivy
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: ${{ env.IMAGE_NAME }}:latest
           format: 'sarif'
