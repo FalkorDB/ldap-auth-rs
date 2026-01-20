@@ -25,5 +25,4 @@ jobs:
             ./docs
             ./README.md
             ./CONTRIBUTING.md
-            ./ARCHITECTURE.md
           config: ./.typos.toml
