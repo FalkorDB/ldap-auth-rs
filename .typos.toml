@@ -19,6 +19,7 @@ Redis = "Redis"
 Vec = "Vec"
 hashmap = "hashmap"
 serialization = "serialization"
+STRINGs = "STRINGs"
 
 # Rust-specific terms
 tokio = "tokio"
