@@ -281,20 +281,23 @@ pub fn create_router(db: Arc<dyn DbService>) -> Router {
     let protected_routes = Router::new()
         // User routes
         .route("/api/users", post(create_user))
-        .route("/api/users/:org", get(list_users))
-        .route("/api/users/:org/:username", get(get_user))
-        .route("/api/users/:org/:username", put(update_user))
-        .route("/api/users/:org/:username", delete(delete_user))
-        .route("/api/users/:org/:username/groups", get(get_user_groups))
+        .route("/api/users/{org}", get(list_users))
+        .route("/api/users/{org}/{username}", get(get_user))
+        .route("/api/users/{org}/{username}", put(update_user))
+        .route("/api/users/{org}/{username}", delete(delete_user))
+        .route("/api/users/{org}/{username}/groups", get(get_user_groups))
         // Group routes
         .route("/api/groups", post(create_group))
-        .route("/api/groups/:org", get(list_groups))
-        .route("/api/groups/:org/:name", get(get_group))
-        .route("/api/groups/:org/:name", put(update_group))
-        .route("/api/groups/:org/:name", delete(delete_group))
-        .route("/api/groups/:org/:name/members", post(add_member_to_group))
+        .route("/api/groups/{org}", get(list_groups))
+        .route("/api/groups/{org}/{name}", get(get_group))
+        .route("/api/groups/{org}/{name}", put(update_group))
+        .route("/api/groups/{org}/{name}", delete(delete_group))
         .route(
-            "/api/groups/:org/:name/members/:username",
+            "/api/groups/{org}/{name}/members",
+            post(add_member_to_group),
+        )
+        .route(
+            "/api/groups/{org}/{name}/members/{username}",
             delete(remove_member_from_group),
         )
         .layer(middleware::from_fn(validate_bearer_token));

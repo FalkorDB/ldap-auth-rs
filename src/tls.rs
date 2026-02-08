@@ -188,6 +188,9 @@ mod tests {
 
     #[test]
     fn test_generate_test_certs() {
+        // Install default crypto provider for rustls
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         // This test requires openssl to be installed
         let result = generate_test_certs();
 
@@ -222,6 +225,9 @@ mod tests {
 
     #[test]
     fn test_load_tls_config_with_pkcs1_key() {
+        // Install default crypto provider for rustls
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         // This test requires openssl to be installed.
         // It mimics cert-manager when `privateKey.encoding=PKCS1` (RSA PRIVATE KEY).
         let temp_dir = std::env::temp_dir();

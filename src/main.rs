@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
                     .await
                 {
                     Ok(tls_config) => {
-                        let addr = api_addr.parse().map_err(|e| {
+                        let addr: std::net::SocketAddr = api_addr.parse().map_err(|e| {
                             anyhow::anyhow!("Invalid API address {}: {}", api_addr, e)
                         })?;
                         axum_server::bind_rustls(addr, tls_config)

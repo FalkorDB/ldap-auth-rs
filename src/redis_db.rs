@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use deadpool_redis::{Config as PoolConfig, Pool, Runtime};
-use redis::AsyncCommands;
+use deadpool_redis::{redis::AsyncCommands, Config as PoolConfig, Pool, Runtime};
 use tracing::{info, warn};
 
 use crate::db::DbService;
@@ -85,7 +84,7 @@ impl RedisDbService {
             AppError::Database(format!("Failed to get connection from pool: {}", e))
         })?;
 
-        let _: String = redis::cmd("PING")
+        let _: String = deadpool_redis::redis::cmd("PING")
             .query_async(&mut conn)
             .await
             .map_err(|e| AppError::Database(format!("Failed to ping Redis: {}", e)))?;
@@ -425,7 +424,8 @@ impl DbService for RedisDbService {
         // Remove group from all users' group sets
         for username in &group.members {
             let user_groups_key = Self::user_groups_key(organization, username);
-            let _: redis::RedisResult<i32> = conn.srem(&user_groups_key, name).await;
+            let _: deadpool_redis::redis::RedisResult<i32> =
+                conn.srem(&user_groups_key, name).await;
         }
 
         // Delete group
@@ -620,7 +620,9 @@ impl DbService for RedisDbService {
     async fn health_check(&self) -> Result<bool> {
         info!("Performing database health check");
         let mut conn = self.pool.get().await?;
-        let result: redis::RedisResult<String> = redis::cmd("PING").query_async(&mut conn).await;
+        let result: deadpool_redis::redis::RedisResult<String> = deadpool_redis::redis::cmd("PING")
+            .query_async(&mut conn)
+            .await;
         let is_healthy = result.is_ok();
         info!("Database health check result: {}", is_healthy);
         Ok(is_healthy)
