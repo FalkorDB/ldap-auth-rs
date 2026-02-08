@@ -188,6 +188,9 @@ mod tests {
 
     #[test]
     fn test_generate_test_certs() {
+        // Install default crypto provider for rustls
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         // This test requires openssl to be installed
         let result = generate_test_certs();
 
