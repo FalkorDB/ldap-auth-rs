@@ -37,4 +37,10 @@ impl From<deadpool_redis::PoolError> for AppError {
     }
 }
 
+impl From<deadpool_redis::redis::RedisError> for AppError {
+    fn from(err: deadpool_redis::redis::RedisError) -> Self {
+        AppError::Database(format!("Redis error: {}", err))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, AppError>;
