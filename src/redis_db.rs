@@ -154,8 +154,10 @@ impl RedisDbService {
         if users_count == 0 && groups_count == 0 {
             conn.srem::<_, _, ()>(Self::organizations_key(), organization)
                 .await?;
-            metrics::set_users_count(organization, 0);
-            metrics::set_groups_count(organization, 0);
+
+            // Drop gauge label entries for deleted organizations to avoid unbounded cardinality.
+            let _ = metrics::custom::USERS_COUNT.remove_label_values(&[organization]);
+            let _ = metrics::custom::GROUPS_COUNT.remove_label_values(&[organization]);
         }
 
         Self::sync_total_organizations_count(conn).await

@@ -249,6 +249,7 @@ async fn test_custom_metrics_are_tracked() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_count_metrics_setters_update_values() {
     use ldap_auth_rs::metrics;
 

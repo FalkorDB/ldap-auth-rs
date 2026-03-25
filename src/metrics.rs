@@ -147,17 +147,20 @@ pub fn record_group_operation(org: &str, operation: &str, success: bool) {
 /// Helper function to set organization count
 #[allow(dead_code)]
 pub fn set_organizations_count(count: i64) {
-    custom::ORGANIZATIONS_COUNT.set(count);
+    let safe = if count < 0 { 0 } else { count };
+    custom::ORGANIZATIONS_COUNT.set(safe);
 }
 
 /// Helper function to set user count per organization
 #[allow(dead_code)]
 pub fn set_users_count(org: &str, count: i64) {
-    custom::USERS_COUNT.with_label_values(&[org]).set(count);
+    let safe = if count < 0 { 0 } else { count };
+    custom::USERS_COUNT.with_label_values(&[org]).set(safe);
 }
 
 /// Helper function to set group count per organization
 #[allow(dead_code)]
 pub fn set_groups_count(org: &str, count: i64) {
-    custom::GROUPS_COUNT.with_label_values(&[org]).set(count);
+    let safe = if count < 0 { 0 } else { count };
+    custom::GROUPS_COUNT.with_label_values(&[org]).set(safe);
 }
