@@ -4,4 +4,5 @@ metadata:
   name: ldap-auth
   labels:
     name: ldap-auth
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/managed-by: kustomize

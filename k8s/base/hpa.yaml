@@ -3,6 +3,7 @@ kind: HorizontalPodAutoscaler
 metadata:
   name: ldap-auth-hpa
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: autoscaling
 spec:
   scaleTargetRef:

@@ -3,6 +3,7 @@ kind: ConfigMap
 metadata:
   name: health-check-script
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: config
 data:
   health-check.sh: |

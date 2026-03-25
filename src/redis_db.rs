@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::db::DbService;
 use crate::error::{AppError, Result};
+use crate::metrics;
 use crate::models::{Group, GroupCreate, GroupUpdate, User, UserCreate, UserUpdate};
 use crate::password::{hash_password, verify_password};
 
@@ -111,6 +112,54 @@ impl RedisDbService {
     fn user_groups_key(organization: &str, username: &str) -> String {
         format!("user:{}:{}:groups", organization, username)
     }
+
+    fn organizations_key() -> &'static str {
+        "organizations"
+    }
+
+    async fn sync_organization_counts(
+        conn: &mut deadpool_redis::Connection,
+        organization: &str,
+    ) -> Result<()> {
+        let users_count: usize = conn.scard(Self::org_users_key(organization)).await?;
+        let groups_count: usize = conn.scard(Self::org_groups_key(organization)).await?;
+
+        metrics::set_users_count(organization, users_count as i64);
+        metrics::set_groups_count(organization, groups_count as i64);
+        Ok(())
+    }
+
+    async fn sync_total_organizations_count(conn: &mut deadpool_redis::Connection) -> Result<()> {
+        let organizations_count: usize = conn.scard(Self::organizations_key()).await?;
+        metrics::set_organizations_count(organizations_count as i64);
+        Ok(())
+    }
+
+    async fn ensure_organization_registered(
+        conn: &mut deadpool_redis::Connection,
+        organization: &str,
+    ) -> Result<()> {
+        conn.sadd::<_, _, ()>(Self::organizations_key(), organization)
+            .await?;
+        Self::sync_total_organizations_count(conn).await
+    }
+
+    async fn cleanup_organization_if_empty(
+        conn: &mut deadpool_redis::Connection,
+        organization: &str,
+    ) -> Result<()> {
+        let users_count: usize = conn.scard(Self::org_users_key(organization)).await?;
+        let groups_count: usize = conn.scard(Self::org_groups_key(organization)).await?;
+
+        if users_count == 0 && groups_count == 0 {
+            conn.srem::<_, _, ()>(Self::organizations_key(), organization)
+                .await?;
+            metrics::set_users_count(organization, 0);
+            metrics::set_groups_count(organization, 0);
+        }
+
+        Self::sync_total_organizations_count(conn).await
+    }
 }
 
 #[async_trait]
@@ -152,6 +201,9 @@ impl DbService for RedisDbService {
         let org_users_key = Self::org_users_key(&user.organization);
         conn.sadd::<_, _, ()>(&org_users_key, &user.username)
             .await?;
+
+        Self::ensure_organization_registered(&mut conn, &user.organization).await?;
+        Self::sync_organization_counts(&mut conn, &user.organization).await?;
 
         info!(
             "Successfully created user: organization={}, username={}",
@@ -271,6 +323,9 @@ impl DbService for RedisDbService {
         // Remove user's groups set
         conn.del::<_, ()>(&user_groups_key).await?;
 
+        Self::sync_organization_counts(&mut conn, organization).await?;
+        Self::cleanup_organization_if_empty(&mut conn, organization).await?;
+
         info!(
             "Successfully deleted user: organization={}, username={}",
             organization, username
@@ -348,6 +403,9 @@ impl DbService for RedisDbService {
         // Add to organization's group list
         let org_groups_key = Self::org_groups_key(&group.organization);
         conn.sadd::<_, _, ()>(&org_groups_key, &group.name).await?;
+
+        Self::ensure_organization_registered(&mut conn, &group.organization).await?;
+        Self::sync_organization_counts(&mut conn, &group.organization).await?;
 
         info!(
             "Successfully created group: organization={}, name={}",
@@ -434,6 +492,9 @@ impl DbService for RedisDbService {
         // Remove from organization's group list
         let org_groups_key = Self::org_groups_key(organization);
         conn.srem::<_, _, ()>(&org_groups_key, name).await?;
+
+        Self::sync_organization_counts(&mut conn, organization).await?;
+        Self::cleanup_organization_if_empty(&mut conn, organization).await?;
 
         info!(
             "Successfully deleted group: organization={}, name={}",

@@ -3,6 +3,7 @@ kind: PodDisruptionBudget
 metadata:
   name: ldap-auth-pdb
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: availability
 spec:
   minAvailable: 1
@@ -15,6 +16,7 @@ kind: PodDisruptionBudget
 metadata:
   name: redis-pdb
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: availability
 spec:
   minAvailable: 1

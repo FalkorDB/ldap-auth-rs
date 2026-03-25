@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: ldap-auth-rs
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: application
     app.kubernetes.io/version: "1.0.0"
 spec:
@@ -18,6 +19,7 @@ spec:
   template:
     metadata:
       labels:
+        app.kubernetes.io/part-of: ldap-auth
         app.kubernetes.io/component: application
         app.kubernetes.io/version: "1.0.0"
       annotations:

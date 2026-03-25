@@ -16,7 +16,7 @@ Complete documentation for LDAP Auth RS - a production-ready LDAP authentication
 ## Operations
 
 6. **[Deployment Guide](DEPLOYMENT.md)** - Docker, Kubernetes, and production deployment
-7. **[Metrics](../METRICS.md)** - Prometheus metrics and monitoring
+7. **[Metrics](METRICS.md)** - Prometheus metrics and monitoring
 8. **[Production Hardening](../PRODUCTION_HARDENING.md)** - Production readiness checklist
 
 ## Development
@@ -36,12 +36,12 @@ Complete documentation for LDAP Auth RS - a production-ready LDAP authentication
 ### For Developers
 - **Want to contribute?** → See [Contributing Guide](../CONTRIBUTING.md)
 - **Understanding code?** → Read [Architecture](ARCHITECTURE.md)
-- **Adding metrics?** → Check [Metrics Guide](../METRICS.md)
+- **Adding metrics?** → Check [Metrics Guide](METRICS.md)
 
 ### For Operators
 - **Deploying?** → Use [Deployment Guide](DEPLOYMENT.md)
 - **Configuring?** → See [Configuration Guide](CONFIGURATION.md)
-- **Monitoring?** → Setup [Metrics](../METRICS.md)
+- **Monitoring?** → Setup [Metrics](METRICS.md)
 - **Production ready?** → Verify [Production Hardening](../PRODUCTION_HARDENING.md)
 
 ---
@@ -56,7 +56,7 @@ Complete documentation for LDAP Auth RS - a production-ready LDAP authentication
 | [Security](SECURITY.md) | Security features & practices | Security Engineers, Operators |
 | [Configuration](CONFIGURATION.md) | All configuration options | Operators, DevOps |
 | [Deployment](DEPLOYMENT.md) | Production deployment guide | DevOps, SRE |
-| [Metrics](../METRICS.md) | Monitoring & observability | SRE, Operators |
+| [Metrics](METRICS.md) | Monitoring & observability | SRE, Operators |
 | [Production Hardening](../PRODUCTION_HARDENING.md) | Production checklist | DevOps, SRE |
 | [Contributing](../CONTRIBUTING.md) | Development guidelines | Contributors |
 

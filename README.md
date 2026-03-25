@@ -139,7 +139,7 @@ Full Prometheus metrics integration:
 - User/Group operation counters
 - Redis operation latency
 
-See [METRICS.md](METRICS.md) for details.
+See [Metrics Guide](docs/METRICS.md) for details.
 
 ### Performance Optimizations
 - **Bearer token caching** for reduced validation overhead
@@ -231,7 +231,7 @@ ldap-auth-rs/
 - [API Examples](docs/API_EXAMPLES.md) - Complete API usage guide
 - [Architecture](docs/ARCHITECTURE.md) - System design and components
 - [Security](docs/SECURITY.md) - Security features and best practices
-- [Metrics](METRICS.md) - Prometheus metrics guide
+- [Metrics](docs/METRICS.md) - Prometheus metrics guide
 - [Production Hardening](PRODUCTION_HARDENING.md) - Production readiness details
 - [Contributing](CONTRIBUTING.md) - Development guidelines
 
@@ -298,7 +298,7 @@ scrape_configs:
     metrics_path: '/metrics'
 ```
 
-See [METRICS.md](METRICS.md) for Grafana dashboard queries.
+See [Metrics Guide](docs/METRICS.md) for Grafana dashboard queries.
 
 ## Performance
 

@@ -403,7 +403,7 @@ scrape_configs:
 
 ### Grafana Dashboard
 
-Import the dashboard from [METRICS.md](../METRICS.md) or use this query:
+Import the dashboard from [Metrics Guide](METRICS.md) or use this query:
 
 ```promql
 # Request rate

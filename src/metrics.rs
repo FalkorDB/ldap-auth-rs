@@ -16,7 +16,10 @@ pub fn get_prometheus_layer() -> (PrometheusMetricLayer<'static>, PrometheusHand
 /// Custom metrics for application-specific tracking
 pub mod custom {
     use once_cell::sync::Lazy;
-    use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
+    use prometheus::{
+        register_counter_vec, register_histogram_vec, register_int_gauge, register_int_gauge_vec,
+        CounterVec, HistogramVec, IntGauge, IntGaugeVec,
+    };
 
     /// Authentication attempts counter (success/failure)
     #[allow(dead_code)]
@@ -56,7 +59,7 @@ pub mod custom {
     #[allow(dead_code)]
     pub static USER_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
-            "user_operations_total",
+            "ldap_user_operations_total",
             "Total number of user operations",
             &["organization", "operation", "result"]
         )
@@ -67,11 +70,43 @@ pub mod custom {
     #[allow(dead_code)]
     pub static GROUP_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
         register_counter_vec!(
-            "group_operations_total",
+            "ldap_group_operations_total",
             "Total number of group operations",
             &["organization", "operation", "result"]
         )
         .expect("Failed to register group_operations counter")
+    });
+
+    /// Total number of organizations tracked by the service
+    #[allow(dead_code)]
+    pub static ORGANIZATIONS_COUNT: Lazy<IntGauge> = Lazy::new(|| {
+        register_int_gauge!(
+            "ldap_organizations_count",
+            "Current total number of organizations"
+        )
+        .expect("Failed to register organizations_count gauge")
+    });
+
+    /// Total number of users per organization
+    #[allow(dead_code)]
+    pub static USERS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
+        register_int_gauge_vec!(
+            "ldap_users_count",
+            "Current total number of users per organization",
+            &["organization"]
+        )
+        .expect("Failed to register users_count gauge")
+    });
+
+    /// Total number of groups per organization
+    #[allow(dead_code)]
+    pub static GROUPS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
+        register_int_gauge_vec!(
+            "ldap_groups_count",
+            "Current total number of groups per organization",
+            &["organization"]
+        )
+        .expect("Failed to register groups_count gauge")
     });
 }
 
@@ -107,4 +142,22 @@ pub fn record_group_operation(org: &str, operation: &str, success: bool) {
     custom::GROUP_OPERATIONS
         .with_label_values(&[org, operation, result])
         .inc();
+}
+
+/// Helper function to set organization count
+#[allow(dead_code)]
+pub fn set_organizations_count(count: i64) {
+    custom::ORGANIZATIONS_COUNT.set(count);
+}
+
+/// Helper function to set user count per organization
+#[allow(dead_code)]
+pub fn set_users_count(org: &str, count: i64) {
+    custom::USERS_COUNT.with_label_values(&[org]).set(count);
+}
+
+/// Helper function to set group count per organization
+#[allow(dead_code)]
+pub fn set_groups_count(org: &str, count: i64) {
+    custom::GROUPS_COUNT.with_label_values(&[org]).set(count);
 }
