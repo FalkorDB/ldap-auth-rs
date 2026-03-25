@@ -1,5 +1,6 @@
 use axum_prometheus::{metrics_exporter_prometheus::PrometheusHandle, PrometheusMetricLayer};
 use once_cell::sync::Lazy;
+use prometheus::{Encoder, TextEncoder};
 
 /// Global Prometheus metrics layer and handle
 /// Initialized once on first use to avoid registry conflicts in tests
@@ -11,6 +12,25 @@ static METRICS: Lazy<(PrometheusMetricLayer<'static>, PrometheusHandle)> =
 pub fn get_prometheus_layer() -> (PrometheusMetricLayer<'static>, PrometheusHandle) {
     let (layer, handle) = &*METRICS;
     (layer.clone(), handle.clone())
+}
+
+/// Render a merged metrics payload that includes both axum-prometheus recorder
+/// metrics and metrics registered in the default Prometheus registry.
+pub fn render_combined_metrics(prometheus_handle: &PrometheusHandle) -> String {
+    let mut merged = prometheus_handle.render();
+
+    let mut buffer = Vec::new();
+    let encoder = TextEncoder::new();
+    if encoder.encode(&prometheus::gather(), &mut buffer).is_ok() {
+        if !merged.ends_with('\n') {
+            merged.push('\n');
+        }
+        if let Ok(default_registry_text) = String::from_utf8(buffer) {
+            merged.push_str(&default_registry_text);
+        }
+    }
+
+    merged
 }
 
 /// Custom metrics for application-specific tracking
@@ -66,6 +86,17 @@ pub mod custom {
         .expect("Failed to register user_operations counter")
     });
 
+    /// Legacy user operations counter (kept for backward compatibility)
+    #[allow(dead_code)]
+    pub static USER_OPERATIONS_LEGACY: Lazy<CounterVec> = Lazy::new(|| {
+        register_counter_vec!(
+            "user_operations_total",
+            "Total number of user operations",
+            &["organization", "operation", "result"]
+        )
+        .expect("Failed to register legacy user_operations counter")
+    });
+
     /// Group operations counter (create, update, delete, membership changes)
     #[allow(dead_code)]
     pub static GROUP_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
@@ -75,6 +106,17 @@ pub mod custom {
             &["organization", "operation", "result"]
         )
         .expect("Failed to register group_operations counter")
+    });
+
+    /// Legacy group operations counter (kept for backward compatibility)
+    #[allow(dead_code)]
+    pub static GROUP_OPERATIONS_LEGACY: Lazy<CounterVec> = Lazy::new(|| {
+        register_counter_vec!(
+            "group_operations_total",
+            "Total number of group operations",
+            &["organization", "operation", "result"]
+        )
+        .expect("Failed to register legacy group_operations counter")
     });
 
     /// Total number of organizations tracked by the service
@@ -133,6 +175,9 @@ pub fn record_user_operation(org: &str, operation: &str, success: bool) {
     custom::USER_OPERATIONS
         .with_label_values(&[org, operation, result])
         .inc();
+    custom::USER_OPERATIONS_LEGACY
+        .with_label_values(&[org, operation, result])
+        .inc();
 }
 
 /// Helper function to record group operations
@@ -140,6 +185,9 @@ pub fn record_user_operation(org: &str, operation: &str, success: bool) {
 pub fn record_group_operation(org: &str, operation: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::GROUP_OPERATIONS
+        .with_label_values(&[org, operation, result])
+        .inc();
+    custom::GROUP_OPERATIONS_LEGACY
         .with_label_values(&[org, operation, result])
         .inc();
 }

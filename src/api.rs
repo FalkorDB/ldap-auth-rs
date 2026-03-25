@@ -309,7 +309,10 @@ pub fn create_router(db: Arc<dyn DbService>) -> Router {
         .route("/api/v1/ca-certificate", get(get_ca_certificate))
         .route(
             "/metrics",
-            get(move || async move { prometheus_handle.render() }),
+            get(move || {
+                let handle = prometheus_handle.clone();
+                async move { crate::metrics::render_combined_metrics(&handle) }
+            }),
         )
         .merge(protected_routes)
         .layer(middleware::from_fn(add_request_id))

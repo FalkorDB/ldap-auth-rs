@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use deadpool_redis::{redis::AsyncCommands, Config as PoolConfig, Pool, Runtime};
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::db::DbService;
@@ -13,6 +16,10 @@ use crate::password::{hash_password, verify_password};
 pub struct RedisDbService {
     pool: Pool,
 }
+
+static RECONCILED_ORGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+const METRICS_RECONCILE_INTERVAL_SECS: u64 = 60;
 
 impl RedisDbService {
     /// Create a new RedisDbService from a Redis URL with retry logic
@@ -57,7 +64,9 @@ impl RedisDbService {
             match Self::test_connection(&pool).await {
                 Ok(_) => {
                     info!("Successfully connected to Redis");
-                    return Ok(Self { pool });
+                    let service = Self { pool: pool.clone() };
+                    service.start_metrics_reconciler();
+                    return Ok(service);
                 }
                 Err(e) => {
                     retries += 1;
@@ -161,6 +170,49 @@ impl RedisDbService {
         }
 
         Self::sync_total_organizations_count(conn).await
+    }
+
+    fn start_metrics_reconciler(&self) {
+        let pool = self.pool.clone();
+        tokio::spawn(async move {
+            if let Err(e) = Self::reconcile_metrics(&pool).await {
+                warn!("Initial metrics reconciliation failed: {}", e);
+            }
+
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                METRICS_RECONCILE_INTERVAL_SECS,
+            ));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            interval.tick().await;
+
+            loop {
+                interval.tick().await;
+                if let Err(e) = Self::reconcile_metrics(&pool).await {
+                    warn!("Periodic metrics reconciliation failed: {}", e);
+                }
+            }
+        });
+    }
+
+    async fn reconcile_metrics(pool: &Pool) -> Result<()> {
+        let mut conn = pool.get().await?;
+        let organizations: Vec<String> = conn.smembers(Self::organizations_key()).await?;
+
+        for organization in &organizations {
+            Self::sync_organization_counts(&mut conn, organization).await?;
+        }
+        Self::sync_total_organizations_count(&mut conn).await?;
+
+        // Remove local label entries for organizations that no longer exist in Redis.
+        let current: HashSet<String> = organizations.into_iter().collect();
+        let mut reconciled = RECONCILED_ORGS.lock().await;
+        for stale in reconciled.difference(&current) {
+            let _ = metrics::custom::USERS_COUNT.remove_label_values(&[stale.as_str()]);
+            let _ = metrics::custom::GROUPS_COUNT.remove_label_values(&[stale.as_str()]);
+        }
+        *reconciled = current;
+
+        Ok(())
     }
 }
 
