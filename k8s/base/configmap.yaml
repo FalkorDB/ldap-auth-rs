@@ -3,6 +3,7 @@ kind: ConfigMap
 metadata:
   name: ldap-auth-config
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: config
 data:
   # Logging

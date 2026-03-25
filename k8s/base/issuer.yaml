@@ -3,5 +3,7 @@ kind: Issuer
 metadata:
   name: ldap-auth-selfsigned-issuer
   namespace: ldap-auth
+  labels:
+    app.kubernetes.io/part-of: ldap-auth
 spec:
   selfSigned: {}

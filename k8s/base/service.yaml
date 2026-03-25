@@ -3,6 +3,7 @@ kind: Service
 metadata:
   name: ldap-auth-service
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: application
   annotations:
     # Internal service - not exposed externally
@@ -30,6 +31,7 @@ kind: Service
 metadata:
   name: ldap-auth-headless
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: application
 spec:
   type: ClusterIP

@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: redis
+  labels:
+    app.kubernetes.io/part-of: ldap-auth
 spec:
   template:
     spec:
@@ -35,6 +37,8 @@ spec:
   volumeClaimTemplates:
   - metadata:
       name: redis-data
+      labels:
+        app.kubernetes.io/part-of: ldap-auth
     spec:
       accessModes:
       - ReadWriteOnce

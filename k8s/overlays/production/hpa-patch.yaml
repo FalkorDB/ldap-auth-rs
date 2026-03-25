@@ -2,6 +2,8 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: ldap-auth-hpa
+  labels:
+    app.kubernetes.io/part-of: ldap-auth
 spec:
   minReplicas: 3
   maxReplicas: 20

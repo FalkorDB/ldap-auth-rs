@@ -3,6 +3,7 @@ kind: Service
 metadata:
   name: redis-service
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: cache
     app.kubernetes.io/name: redis
 spec:
@@ -21,6 +22,7 @@ kind: Service
 metadata:
   name: redis-headless
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: cache
     app.kubernetes.io/name: redis
 spec:

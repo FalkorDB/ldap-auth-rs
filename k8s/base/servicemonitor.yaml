@@ -5,6 +5,7 @@ kind: ServiceMonitor
 metadata:
   name: ldap-auth-metrics
   labels:
+    app.kubernetes.io/part-of: ldap-auth
     app.kubernetes.io/component: monitoring
     prometheus: kube-prometheus
 spec:

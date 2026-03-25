@@ -3,6 +3,8 @@ kind: Certificate
 metadata:
   name: ldap-auth-tls-cert
   namespace: ldap-auth
+  labels:
+    app.kubernetes.io/part-of: ldap-auth
 spec:
   secretName: ldap-auth-tls
   duration: 2160h # 90 days
