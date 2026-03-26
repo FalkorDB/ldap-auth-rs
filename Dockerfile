@@ -42,7 +42,9 @@ FROM alpine:3.21
 WORKDIR /app
 
 # Install only runtime dependencies (OpenSSL, curl, and CA certificates)
-RUN apk add --no-cache \
+# Update all packages to resolve vulnerabilities
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache \
     ca-certificates \
     curl \
     libgcc \
