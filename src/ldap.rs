@@ -69,6 +69,7 @@ use crate::ldap_lib::{
     create_group_search_entry_response, create_search_done_response, create_search_entry_response,
     create_whoami_response, LdapResultCode,
 };
+use crate::metrics;
 
 /// LDAP message types
 #[derive(Debug)]
@@ -803,12 +804,16 @@ async fn handle_bind_request(
     match db.verify_user_password(&org, &username, &password).await {
         Ok(true) => {
             info!("User {}/{} authenticated successfully", org, username);
+            metrics::record_auth_attempt(&org, true);
+            metrics::record_ldap_bind(&org, true);
             *authenticated_user = Some(username);
             *authenticated_org = Some(org);
             create_bind_response(message_id, LdapResultCode::Success as u8)
         }
         Ok(false) => {
             warn!("Invalid credentials for {}/{}", org, username);
+            metrics::record_auth_attempt(&org, false);
+            metrics::record_ldap_bind(&org, false);
             *authenticated_user = None;
             *authenticated_org = None;
             create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8)
@@ -818,12 +823,16 @@ async fn handle_bind_request(
                 "Invalid credentials for {}/{} (user not found)",
                 org, username
             );
+            metrics::record_auth_attempt(&org, false);
+            metrics::record_ldap_bind(&org, false);
             *authenticated_user = None;
             *authenticated_org = None;
             create_bind_response(message_id, LdapResultCode::InvalidCredentials as u8)
         }
         Err(e) => {
             error!("Error verifying credentials: {}", e);
+            metrics::record_auth_attempt(&org, false);
+            metrics::record_ldap_bind(&org, false);
             *authenticated_user = None;
             *authenticated_org = None;
             create_bind_response(message_id, LdapResultCode::OperationsError as u8)
