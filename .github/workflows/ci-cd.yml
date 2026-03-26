@@ -361,6 +361,7 @@ jobs:
           output-format: sarif
           output-file: grype-amd64-results.sarif
           severity-cutoff: high
+          only-fixed: true
 
       - name: Display vulnerabilities
         if: always()
@@ -488,6 +489,7 @@ jobs:
           output-format: sarif
           output-file: grype-arm64-results.sarif
           severity-cutoff: high
+          only-fixed: true
 
       - name: Display vulnerabilities
         if: always()
