@@ -65,9 +65,9 @@ use crate::db::DbService;
 use crate::error::AppError;
 use crate::error::Result;
 use crate::ldap_lib::{
-    create_bind_response, create_error_response, create_extended_response,
+    LdapResultCode, create_bind_response, create_error_response, create_extended_response,
     create_group_search_entry_response, create_search_done_response, create_search_entry_response,
-    create_whoami_response, LdapResultCode,
+    create_whoami_response,
 };
 use crate::metrics;
 
@@ -592,18 +592,18 @@ pub fn parse_dn(dn: &str) -> Option<(String, String)> {
             // Extract the value from the original part to preserve case
             let value = &part[part.len() - stripped.len()..];
             username = Some(value.to_string());
-        } else if let Some(stripped) = part_lower.strip_prefix("ou=") {
-            if organization.is_none() {
-                // Extract the value from the original part to preserve case
-                let value = &part[part.len() - stripped.len()..];
-                organization = Some(value.to_string());
-            }
-        } else if let Some(stripped) = part_lower.strip_prefix("dc=") {
-            if first_dc.is_none() {
-                // Extract the value from the original part to preserve case
-                let value = &part[part.len() - stripped.len()..];
-                first_dc = Some(value.to_string());
-            }
+        } else if let Some(stripped) = part_lower.strip_prefix("ou=")
+            && organization.is_none()
+        {
+            // Extract the value from the original part to preserve case
+            let value = &part[part.len() - stripped.len()..];
+            organization = Some(value.to_string());
+        } else if let Some(stripped) = part_lower.strip_prefix("dc=")
+            && first_dc.is_none()
+        {
+            // Extract the value from the original part to preserve case
+            let value = &part[part.len() - stripped.len()..];
+            first_dc = Some(value.to_string());
         }
     }
 
@@ -1582,7 +1582,7 @@ mod tests {
         assert!(!response.is_empty());
         assert_eq!(response[0], 0x30); // SEQUENCE
         assert_eq!(response[4], 2); // message ID
-                                    // Result code should be 49 (invalid credentials)
+        // Result code should be 49 (invalid credentials)
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 49);
     }
@@ -1612,7 +1612,7 @@ mod tests {
         assert!(!response.is_empty());
         assert_eq!(response[0], 0x30); // SEQUENCE
         assert_eq!(response[4], 5); // message ID
-                                    // Result code should be 2 (protocol error)
+        // Result code should be 2 (protocol error)
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 2);
     }
@@ -2109,7 +2109,7 @@ mod tests {
         // Per RFC 4532: Anonymous should return success with empty authorization identity (no response value)
         let result_code_pos = 9;
         assert_eq!(response[result_code_pos], 0); // Success
-                                                  // Response should NOT contain "dn:" for anonymous - response value should be absent
+        // Response should NOT contain "dn:" for anonymous - response value should be absent
         let response_str = String::from_utf8_lossy(&response);
         assert!(!response_str.contains("dn:"));
     }

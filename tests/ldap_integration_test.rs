@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tokio_rustls::TlsConnector;
 
 async fn setup_test_db() -> Arc<dyn DbService> {

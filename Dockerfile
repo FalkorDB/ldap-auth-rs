@@ -44,6 +44,9 @@ WORKDIR /app
 # Install only runtime dependencies (OpenSSL, curl, and CA certificates)
 # Update all packages to resolve vulnerabilities
 # We use the edge repository to pull fixed versions for curl and nghttp2-libs
+# This is required to remediate:
+# - CVE-2026-3805 (curl < 8.19.0)
+# - CVE-2026-27135 (nghttp2-libs < 1.68.0)
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache \
     ca-certificates \
