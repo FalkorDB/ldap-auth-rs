@@ -21,7 +21,9 @@ async fn setup_test_db() -> Arc<dyn DbService> {
 #[serial_test::serial]
 async fn test_api_user_crud_with_metrics() {
     // Set up authentication token
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let base_url = start_test_server(db).await;
@@ -103,7 +105,9 @@ async fn start_test_server(db: Arc<dyn DbService>) -> String {
 async fn test_api_user_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -179,7 +183,9 @@ async fn test_api_user_crud() {
 async fn test_api_group_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db.clone());
@@ -319,8 +325,12 @@ async fn test_health_check() {
 #[serial_test::serial]
 async fn test_ca_certificate_endpoint_tls_disabled() {
     // Test that CA certificate endpoint returns error when TLS is disabled
-    std::env::remove_var("ENABLE_TLS");
-    std::env::remove_var("TLS_CERT_PATH");
+    unsafe {
+        std::env::remove_var("ENABLE_TLS");
+    }
+    unsafe {
+        std::env::remove_var("TLS_CERT_PATH");
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -389,8 +399,12 @@ async fn test_ca_certificate_endpoint_tls_enabled() {
     }
 
     // Set environment variables
-    std::env::set_var("ENABLE_TLS", "true");
-    std::env::set_var("TLS_CERT_PATH", cert_path_str);
+    unsafe {
+        std::env::set_var("ENABLE_TLS", "true");
+    }
+    unsafe {
+        std::env::set_var("TLS_CERT_PATH", cert_path_str);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -425,6 +439,10 @@ async fn test_ca_certificate_endpoint_tls_enabled() {
 
     // Cleanup
     std::fs::remove_file(cert_path_str).ok();
-    std::env::remove_var("ENABLE_TLS");
-    std::env::remove_var("TLS_CERT_PATH");
+    unsafe {
+        std::env::remove_var("ENABLE_TLS");
+    }
+    unsafe {
+        std::env::remove_var("TLS_CERT_PATH");
+    }
 }

@@ -315,13 +315,13 @@ pub fn create_group_search_entry_response(
     }
 
     // description attribute (if present)
-    if let Some(desc) = description {
-        if should_include("description") {
-            attrs.extend_from_slice(&encode_partial_attribute(
-                "description",
-                &[desc.as_bytes().to_vec()],
-            ));
-        }
+    if let Some(desc) = description
+        && should_include("description")
+    {
+        attrs.extend_from_slice(&encode_partial_attribute(
+            "description",
+            &[desc.as_bytes().to_vec()],
+        ));
     }
 
     // member attributes (one for each member)

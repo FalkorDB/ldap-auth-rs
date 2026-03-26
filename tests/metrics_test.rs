@@ -146,7 +146,9 @@ async fn start_test_server(db: Arc<dyn DbService>) -> String {
 
 #[tokio::test]
 async fn test_metrics_endpoint_exists() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let base_url = start_test_server(db).await;
@@ -192,7 +194,9 @@ async fn test_metrics_endpoint_exists() {
 #[tokio::test]
 async fn test_custom_metrics_are_tracked() {
     // First start the server so the metrics layer is initialized
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let base_url = start_test_server(db).await;
@@ -274,7 +278,9 @@ fn test_count_metrics_setters_update_values() {
 
 #[tokio::test]
 async fn test_metrics_track_http_requests() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let base_url = start_test_server(db).await;
