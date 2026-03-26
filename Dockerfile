@@ -43,13 +43,16 @@ WORKDIR /app
 
 # Install only runtime dependencies (OpenSSL, curl, and CA certificates)
 # Update all packages to resolve vulnerabilities
+# We use the edge repository to pull fixed versions for curl and nghttp2-libs
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache \
     ca-certificates \
-    curl \
     libgcc \
     openssl \
-    tzdata
+    tzdata && \
+    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
+    curl \
+    nghttp2-libs
 
 # Copy binaries from builder
 COPY --from=final-builder /app/target/release/ldap-auth-rs /app/ldap-auth-rs
