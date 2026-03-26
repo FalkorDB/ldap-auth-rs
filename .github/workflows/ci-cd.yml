@@ -348,6 +348,7 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=build-amd64
@@ -392,6 +393,7 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=build-arm64
@@ -403,6 +405,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-amd64, build-arm64]
     if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    env:
+      SCAN_IMAGE: ""
 
     services:
       redis:
@@ -443,6 +447,18 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
           flavor: |
             suffix=${{ github.event_name == 'pull_request' && '-amd64' || '' }}
+
+      - name: Build image for verification (PR)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=build-amd64
+          platforms: linux/amd64
 
       - name: Select canonical image tag
         id: canonical_tag
@@ -509,6 +525,23 @@ jobs:
           image: ${{ env.SCAN_IMAGE }}
           fail-build: true
           severity-cutoff: high
+
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Dry-run K8s deployment (Kustomize)
+        run: |
+          echo "=== Testing Dev Overlay ==="
+          kustomize build k8s/overlays/dev --load-restrictor LoadRestrictionsNone > /dev/null
+          
+          echo "=== Testing Staging Overlay ==="
+          kustomize build k8s/overlays/staging --load-restrictor LoadRestrictionsNone > /dev/null
+          
+          echo "=== Testing Production Overlay ==="
+          kustomize build k8s/overlays/production --load-restrictor LoadRestrictionsNone > /dev/null
+          echo "✓ Kustomize builds successful"
 
       - name: Upload Docker image scan results
         uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
