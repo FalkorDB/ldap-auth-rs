@@ -350,8 +350,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-amd64
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-amd64,mode=max
+          cache-from: type=gha,scope=build-amd64
+          cache-to: type=gha,mode=max,scope=build-amd64
           platforms: linux/amd64
 
   build-arm64:
@@ -394,8 +394,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-arm64
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-arm64,mode=max
+          cache-from: type=gha,scope=build-arm64
+          cache-to: type=gha,mode=max,scope=build-arm64
           platforms: linux/arm64
 
   create-manifest:
