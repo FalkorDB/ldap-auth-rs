@@ -23,6 +23,7 @@ pub struct RedisDbService {
 static RECONCILED_ORGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 const METRICS_RECONCILE_INTERVAL_SECS: u64 = 60;
+const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_millis(500);
 
 type RedisConnection = deadpool_redis::Connection;
 type RedisReadFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -173,6 +174,14 @@ impl RedisDbService {
             .map_err(|e| AppError::Database(format!("Failed to ping Redis: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Test the Redis connection with a timeout to keep health checks responsive.
+    async fn test_connection_with_timeout(pool: &Pool, timeout: tokio::time::Duration) -> bool {
+        match tokio::time::timeout(timeout, Self::test_connection(pool)).await {
+            Ok(result) => result.is_ok(),
+            Err(_) => false,
+        }
     }
 
     async fn get_primary_conn(&self) -> Result<RedisConnection> {
@@ -1032,11 +1041,16 @@ impl DbService for RedisDbService {
     }
 
     async fn connection_status(&self) -> Result<DbConnectionHealth> {
-        let primary_available = Self::test_connection(&self.primary_pool).await.is_ok();
-        let replica_available = match self.replica_pool.as_ref() {
-            Some(pool) => Self::test_connection(pool).await.is_ok(),
-            None => false,
+        let primary_check =
+            Self::test_connection_with_timeout(&self.primary_pool, HEALTH_CHECK_TIMEOUT);
+        let replica_check = async {
+            match self.replica_pool.as_ref() {
+                Some(pool) => Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT).await,
+                None => false,
+            }
         };
+
+        let (primary_available, replica_available) = tokio::join!(primary_check, replica_check);
 
         Ok(DbConnectionHealth {
             can_read: primary_available || replica_available,
