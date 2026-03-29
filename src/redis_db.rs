@@ -79,9 +79,12 @@ impl RedisDbService {
         let mut delay = initial_delay;
 
         loop {
-            let primary_result = Self::test_connection(&primary_pool).await;
+            let primary_result =
+                Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT).await;
             let replica_result = match replica_pool.as_ref() {
-                Some(pool) => Some(Self::test_connection(pool).await),
+                Some(pool) => {
+                    Some(Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT).await)
+                }
                 None => None,
             };
 
@@ -172,11 +175,17 @@ impl RedisDbService {
         Ok(())
     }
 
-    /// Test the Redis connection with a timeout to keep health checks responsive.
-    async fn test_connection_with_timeout(pool: &Pool, timeout: tokio::time::Duration) -> bool {
+    /// Test the Redis connection with a timeout to keep probes bounded.
+    async fn test_connection_with_timeout(
+        pool: &Pool,
+        timeout: tokio::time::Duration,
+    ) -> Result<()> {
         match tokio::time::timeout(timeout, Self::test_connection(pool)).await {
-            Ok(result) => result.is_ok(),
-            Err(_) => false,
+            Ok(result) => result,
+            Err(_) => Err(AppError::Database(format!(
+                "Redis probe timed out after {:?}",
+                timeout
+            ))),
         }
     }
 
@@ -1041,13 +1050,17 @@ impl DbService for RedisDbService {
         // dead primary cannot starve the replica check on a shared Tokio worker.
         let primary_pool = self.primary_pool.clone();
         let primary_task = tokio::spawn(async move {
-            Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT).await
+            Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT)
+                .await
+                .is_ok()
         });
 
         let replica_pool = self.replica_pool.clone();
         let replica_task = tokio::spawn(async move {
             match replica_pool.as_ref() {
-                Some(pool) => Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT).await,
+                Some(pool) => Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT)
+                    .await
+                    .is_ok(),
                 None => false,
             }
         });

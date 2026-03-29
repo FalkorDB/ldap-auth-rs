@@ -41,6 +41,9 @@ cargo test --lib
 echo "🔗 Running integration tests..."
 cargo test --tests -- --test-threads=1
 
+echo "🛑 Stopping shared Redis services before isolated failover compose test..."
+docker compose stop redis redis-replica
+
 echo "🔁 Running compose-backed replica failover test..."
 bash tests/ldap_replica_failover_test.sh
 

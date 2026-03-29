@@ -30,6 +30,10 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 
+      volumes:
+        - name: redis-config
+          emptyDir: {}
+
       containers:
         - name: redis
           image: redis:7-alpine
