@@ -16,12 +16,12 @@ A production-ready, lightweight Rust-based LDAP authentication service with REST
 - 📂 **LDAP Interface** supporting bind, search, whoami, unbind operations
 - ✅ **LDAP Compliance Tests** with ldapsearch validation (RFC 4511/4532)
 - 🔒 **LDAP Search Authorization** - restrict search operations to specific organizations
-- 💾 **Redis Backend** with connection pooling and caching
+- 💾 **Redis Backend** with primary/write connection pooling and optional read replica fallback
 - 🔒 **TLS Support** for both API and LDAP servers
 - 📊 **Prometheus Metrics** for production monitoring
 - 📝 **Audit Logging** for compliance and security
 - ✅ **Full Test Coverage** - 56 tests including integration tests
-- 🏥 **Health Checks** with dependency status
+- 🏥 **Health Checks** with healthy/degraded/unhealthy dependency status
 - ⚡ **High Performance** with bearer token caching
 
 ## Quick Start
@@ -57,6 +57,10 @@ docker run -d -p 6379:6379 redis:7-alpine
 export API_BEARER_TOKEN="your-secure-token"
 export REDIS_HOST="127.0.0.1"
 export REDIS_PORT="6379"
+
+# Optional: serve LDAP auth and reads from a replica if the primary is offline
+# export REDIS_REPLICA_HOST="127.0.0.1"
+# export REDIS_REPLICA_PORT="6380"
 
 # 3. Run the service
 cargo run --release
@@ -107,7 +111,7 @@ curl -H "Authorization: Bearer your-token" http://localhost:8080/api/users/myorg
 - `DELETE /api/groups/:org/:name/members/:username` - Remove user from group
 
 ### Health & Monitoring
-- `GET /health` - Health check with Redis status
+- `GET /health` - Health check with healthy/degraded/unhealthy Redis status
 - `GET /metrics` - Prometheus metrics
 
 ## LDAP Operations
@@ -171,6 +175,12 @@ API_PORT=8080
 LDAP_HOST=0.0.0.0
 LDAP_PORT=3893
 RUST_LOG=info
+
+# Redis read replica (optional)
+REDIS_REPLICA_HOST=redis-replica
+REDIS_REPLICA_PORT=6379
+REDIS_REPLICA_USERNAME=replica-user
+REDIS_REPLICA_PASSWORD=replica-password
 
 # TLS (optional)
 TLS_CERT_PATH=/path/to/cert.pem

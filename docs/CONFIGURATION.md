@@ -16,6 +16,10 @@
 | `REDIS_PORT` | `6379` | Redis server port |
 | `REDIS_USERNAME` | - | Redis username (optional, for ACL) |
 | `REDIS_PASSWORD` | - | Redis password (optional) |
+| `REDIS_REPLICA_HOST` | - | Optional read-only replica hostname used for auth and other read operations when the primary is unavailable |
+| `REDIS_REPLICA_PORT` | primary port | Optional replica port |
+| `REDIS_REPLICA_USERNAME` | primary username | Optional replica username override |
+| `REDIS_REPLICA_PASSWORD` | primary password | Optional replica password override |
 
 ### Optional Configuration
 
@@ -38,6 +42,8 @@
 export API_BEARER_TOKEN="my-secure-token"
 export REDIS_HOST="127.0.0.1"
 export REDIS_PORT="6379"
+export REDIS_REPLICA_HOST="127.0.0.1"
+export REDIS_REPLICA_PORT="6380"
 export API_PORT="8080"
 export RUST_LOG="debug"
 ```
@@ -50,6 +56,8 @@ Create a `.env` file in the project root:
 API_BEARER_TOKEN=my-secure-token
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
+REDIS_REPLICA_HOST=127.0.0.1
+REDIS_REPLICA_PORT=6380
 API_PORT=8080
 LDAP_PORT=3389
 RUST_LOG=info
@@ -62,6 +70,8 @@ docker run -d \
   -e API_BEARER_TOKEN=my-token \
   -e REDIS_HOST=redis \
   -e REDIS_PORT=6379 \
+  -e REDIS_REPLICA_HOST=redis-replica \
+  -e REDIS_REPLICA_PORT=6379 \
   -e RUST_LOG=info \
   -p 8080:8080 \
   ldap-auth-rs:latest
@@ -77,6 +87,8 @@ services:
       API_BEARER_TOKEN: my-secure-token
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_REPLICA_HOST: redis-replica
+      REDIS_REPLICA_PORT: 6379
       API_PORT: 8080
       RUST_LOG: info
 ```
@@ -99,6 +111,8 @@ metadata:
 data:
   REDIS_HOST: redis
   REDIS_PORT: "6379"
+  REDIS_REPLICA_HOST: redis-replica
+  REDIS_REPLICA_PORT: "6379"
   API_PORT: "8080"
   RUST_LOG: info
 ```
@@ -112,6 +126,12 @@ The application validates configuration on startup and will **fail fast** if:
 - Port numbers are out of range
 
 This ensures deployment issues are caught immediately.
+
+If a replica is configured, startup succeeds when either:
+- The primary is reachable, or
+- The primary is down but the replica is reachable
+
+In the second case the service starts in a read-only degraded mode. LDAP bind/authentication and other reads continue to work against the replica, while write operations keep requiring the primary.
 
 ## Security Best Practices
 
@@ -154,6 +174,21 @@ REDIS_PORT=6379
 REDIS_USERNAME=myuser
 REDIS_PASSWORD=my-secure-password
 # Results in: redis://myuser:my-secure-password@redis.example.com:6379
+
+# With a read replica inheriting the primary credentials
+REDIS_HOST=redis-primary.example.com
+REDIS_PORT=6379
+REDIS_USERNAME=myuser
+REDIS_PASSWORD=my-secure-password
+REDIS_REPLICA_HOST=redis-replica.example.com
+# Results in: redis://myuser:my-secure-password@redis-replica.example.com:6379
+
+# With replica-specific credentials
+REDIS_REPLICA_HOST=redis-replica.example.com
+REDIS_REPLICA_PORT=6380
+REDIS_REPLICA_USERNAME=replica-user
+REDIS_REPLICA_PASSWORD=replica-password
+# Results in: redis://replica-user:replica-password@redis-replica.example.com:6380
 ```
 
 **Security best practices:**
