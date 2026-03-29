@@ -125,11 +125,20 @@ assert_health_degraded() {
 assert_ldap_bind_works() {
   local bind_dn="cn=${TEST_USER},ou=${TEST_ORG},${BASE_DN}"
 
-  ldapsearch -x -H "$LDAP_URL" \
-    -D "$bind_dn" \
-    -w "$TEST_PASSWORD" \
-    -b "$BASE_DN" \
-    -s base '(objectclass=*)' >/tmp/ldap-replica-bind.out 2>&1
+  for _ in $(seq 1 20); do
+    if ldapsearch -x -H "$LDAP_URL" \
+      -D "$bind_dn" \
+      -w "$TEST_PASSWORD" \
+      -b "$BASE_DN" \
+      -s base '(objectclass=*)' >/tmp/ldap-replica-bind.out 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "LDAP bind did not succeed within 20 seconds after primary shutdown" >&2
+  cat /tmp/ldap-replica-bind.out >&2 || true
+  return 1
 }
 
 trap cleanup EXIT
