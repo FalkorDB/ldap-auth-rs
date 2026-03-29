@@ -154,12 +154,8 @@ impl RedisDbService {
 
     fn create_pool(redis_url: &str) -> Result<Pool> {
         let cfg = PoolConfig::from_url(redis_url);
-        cfg.create_pool(Some(Runtime::Tokio1)).map_err(|err| {
-            AppError::Database(format!(
-                "Failed to create Redis pool: {}",
-                err
-            ))
-        })
+        cfg.create_pool(Some(Runtime::Tokio1))
+            .map_err(|err| AppError::Database(format!("Failed to create Redis pool: {}", err)))
     }
 
     /// Test the Redis connection
