@@ -18,10 +18,96 @@ async fn setup_test_db() -> Arc<dyn DbService> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
+async fn test_api_user_crud_with_metrics() {
+    // Set up authentication token
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
+
+    let db = setup_test_db().await;
+    let base_url = start_test_server(db).await;
+
+    let client = Client::new();
+
+    // 1. Create user via API
+    let org = "metrics-test-org";
+    let username = "metricsuser";
+    let user_create = json!({
+        "organization": org,
+        "username": username,
+        "password": "testpass123",
+        "email": "test@example.com"
+    });
+
+    let resp = client
+        .post(format!("{}/api/users", base_url))
+        .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
+        .json(&user_create)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    // 2. Verify metrics updated
+    let metrics_after = client
+        .get(format!("{}/metrics", base_url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(
+        metrics_after.contains("ldap_user_operations_total"),
+        "Should contain user operations metric"
+    );
+    assert!(
+        metrics_after.contains(&format!("organization=\"{}\"", org)),
+        "Should contain the organization label"
+    );
+    assert!(
+        metrics_after.contains("operation=\"create\""),
+        "Should contain the create operation label"
+    );
+
+    // 3. Verify count metric
+    assert!(
+        metrics_after.contains("ldap_users_count"),
+        "Should contain users count metric"
+    );
+
+    // 4. Delete and verify cleanup
+    client
+        .delete(format!("{}/api/users/{}/{}", base_url, org, username))
+        .header("Authorization", format!("Bearer {}", TEST_BEARER_TOKEN))
+        .send()
+        .await
+        .unwrap();
+}
+
+async fn start_test_server(db: Arc<dyn DbService>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind");
+    let addr = listener.local_addr().unwrap();
+    let app = api::create_router(db);
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    format!("http://{}", addr)
+}
+
+#[tokio::test]
 async fn test_api_user_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -97,7 +183,9 @@ async fn test_api_user_crud() {
 async fn test_api_group_crud() {
     // Set up authentication token
     // Token set via TEST_BEARER_TOKEN constant;
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db.clone());
@@ -237,8 +325,12 @@ async fn test_health_check() {
 #[serial_test::serial]
 async fn test_ca_certificate_endpoint_tls_disabled() {
     // Test that CA certificate endpoint returns error when TLS is disabled
-    std::env::remove_var("ENABLE_TLS");
-    std::env::remove_var("TLS_CERT_PATH");
+    unsafe {
+        std::env::remove_var("ENABLE_TLS");
+    }
+    unsafe {
+        std::env::remove_var("TLS_CERT_PATH");
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -307,8 +399,12 @@ async fn test_ca_certificate_endpoint_tls_enabled() {
     }
 
     // Set environment variables
-    std::env::set_var("ENABLE_TLS", "true");
-    std::env::set_var("TLS_CERT_PATH", cert_path_str);
+    unsafe {
+        std::env::set_var("ENABLE_TLS", "true");
+    }
+    unsafe {
+        std::env::set_var("TLS_CERT_PATH", cert_path_str);
+    }
 
     let db = setup_test_db().await;
     let app = api::create_router(db);
@@ -343,6 +439,10 @@ async fn test_ca_certificate_endpoint_tls_enabled() {
 
     // Cleanup
     std::fs::remove_file(cert_path_str).ok();
-    std::env::remove_var("ENABLE_TLS");
-    std::env::remove_var("TLS_CERT_PATH");
+    unsafe {
+        std::env::remove_var("ENABLE_TLS");
+    }
+    unsafe {
+        std::env::remove_var("TLS_CERT_PATH");
+    }
 }

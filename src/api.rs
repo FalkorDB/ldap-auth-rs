@@ -1,17 +1,17 @@
 use axum::{
+    Json, Router,
     extract::{Path, Request, State},
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
-use tracing::{debug, instrument, Instrument};
+use tracing::{Instrument, debug, instrument};
 
 use crate::auth::validate_bearer_token;
 use crate::config::Config;
@@ -33,11 +33,9 @@ async fn add_request_id(mut request: Request, next: Next) -> Response {
         uri = %request.uri()
     );
 
-    let response = async move { next.run(request).await }
+    async move { next.run(request).await }
         .instrument(span)
-        .await;
-
-    response
+        .await
 }
 
 pub type AppState = Arc<dyn DbService>;

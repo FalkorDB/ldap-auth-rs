@@ -40,7 +40,9 @@ async fn start_server(db: Arc<dyn DbService>) -> (String, tokio::task::JoinHandl
 
 #[tokio::test]
 async fn test_create_user_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -70,7 +72,9 @@ async fn test_create_user_route() {
 
 #[tokio::test]
 async fn test_get_user_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -106,7 +110,9 @@ async fn test_get_user_route() {
 
 #[tokio::test]
 async fn test_get_user_not_found() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -126,7 +132,9 @@ async fn test_get_user_not_found() {
 
 #[tokio::test]
 async fn test_update_user_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -170,7 +178,9 @@ async fn test_update_user_route() {
 
 #[tokio::test]
 async fn test_delete_user_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -213,7 +223,9 @@ async fn test_delete_user_route() {
 
 #[tokio::test]
 async fn test_list_users_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -252,7 +264,9 @@ async fn test_list_users_route() {
 
 #[tokio::test]
 async fn test_get_user_groups_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -323,7 +337,9 @@ async fn test_get_user_groups_route() {
 
 #[tokio::test]
 async fn test_create_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -351,7 +367,9 @@ async fn test_create_group_route() {
 
 #[tokio::test]
 async fn test_get_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -390,7 +408,9 @@ async fn test_get_group_route() {
 
 #[tokio::test]
 async fn test_update_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -434,7 +454,9 @@ async fn test_update_group_route() {
 
 #[tokio::test]
 async fn test_delete_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -483,7 +505,9 @@ async fn test_delete_group_route() {
 
 #[tokio::test]
 async fn test_list_groups_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -522,7 +546,9 @@ async fn test_list_groups_route() {
 
 #[tokio::test]
 async fn test_add_member_to_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -570,15 +596,19 @@ async fn test_add_member_to_group_route() {
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["success"], true);
-    assert!(body["data"]["members"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("memberuser")));
+    assert!(
+        body["data"]["members"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("memberuser"))
+    );
 }
 
 #[tokio::test]
 async fn test_remove_member_from_group_route() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -637,17 +667,21 @@ async fn test_remove_member_from_group_route() {
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["success"], true);
-    assert!(!body["data"]["members"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("removeuser")));
+    assert!(
+        !body["data"]["members"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("removeuser"))
+    );
 }
 
 // Test error cases
 
 #[tokio::test]
 async fn test_create_duplicate_user() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -681,7 +715,9 @@ async fn test_create_duplicate_user() {
 
 #[tokio::test]
 async fn test_create_duplicate_group() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -715,7 +751,9 @@ async fn test_create_duplicate_group() {
 
 #[tokio::test]
 async fn test_add_nonexistent_user_to_group() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();
@@ -752,7 +790,9 @@ async fn test_add_nonexistent_user_to_group() {
 
 #[tokio::test]
 async fn test_delete_user_removes_from_groups() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let (base_url, _handle) = start_server(db).await;
     let client = Client::new();

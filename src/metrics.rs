@@ -1,4 +1,4 @@
-use axum_prometheus::{metrics_exporter_prometheus::PrometheusHandle, PrometheusMetricLayer};
+use axum_prometheus::{PrometheusMetricLayer, metrics_exporter_prometheus::PrometheusHandle};
 use once_cell::sync::Lazy;
 use prometheus::{Encoder, TextEncoder};
 
@@ -37,8 +37,8 @@ pub fn render_combined_metrics(prometheus_handle: &PrometheusHandle) -> String {
 pub mod custom {
     use once_cell::sync::Lazy;
     use prometheus::{
-        register_counter_vec, register_histogram_vec, register_int_gauge, register_int_gauge_vec,
-        CounterVec, HistogramVec, IntGauge, IntGaugeVec,
+        CounterVec, HistogramVec, IntGauge, IntGaugeVec, register_counter_vec,
+        register_histogram_vec, register_int_gauge, register_int_gauge_vec,
     };
 
     /// Authentication attempts counter (success/failure)

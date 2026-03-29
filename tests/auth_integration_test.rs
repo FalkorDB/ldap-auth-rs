@@ -32,7 +32,9 @@ async fn start_test_server(db: Arc<dyn DbService>, port: u16) {
 
 #[tokio::test]
 async fn test_api_health_check_no_auth() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18080;
     start_test_server(db.clone(), port).await;
@@ -49,7 +51,9 @@ async fn test_api_health_check_no_auth() {
 
 #[tokio::test]
 async fn test_api_requires_auth() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18081;
     start_test_server(db.clone(), port).await;
@@ -68,7 +72,9 @@ async fn test_api_requires_auth() {
 
 #[tokio::test]
 async fn test_api_with_invalid_token() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18082;
     start_test_server(db.clone(), port).await;
@@ -88,7 +94,9 @@ async fn test_api_with_invalid_token() {
 
 #[tokio::test]
 async fn test_api_with_valid_token() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18083;
     start_test_server(db.clone(), port).await;
@@ -130,7 +138,9 @@ async fn test_api_with_valid_token() {
 
 #[tokio::test]
 async fn test_api_invalid_auth_format() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18084;
     start_test_server(db.clone(), port).await;
@@ -150,7 +160,9 @@ async fn test_api_invalid_auth_format() {
 
 #[tokio::test]
 async fn test_all_protected_endpoints_require_auth() {
-    std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    unsafe {
+        std::env::set_var("API_BEARER_TOKEN", TEST_BEARER_TOKEN);
+    }
     let db = setup_test_db().await;
     let port = 18085;
     start_test_server(db.clone(), port).await;

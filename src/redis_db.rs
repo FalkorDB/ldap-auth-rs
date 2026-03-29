@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use deadpool_redis::{redis::AsyncCommands, Config as PoolConfig, Pool, Runtime};
+use deadpool_redis::{Config as PoolConfig, Pool, Runtime, redis::AsyncCommands};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::db::DbService;
 use crate::error::{AppError, Result};
@@ -259,6 +259,8 @@ impl DbService for RedisDbService {
         Self::ensure_organization_registered(&mut conn, &user.organization).await?;
         Self::sync_organization_counts(&mut conn, &user.organization).await?;
 
+        metrics::record_user_operation(&user.organization, "create", true);
+
         info!(
             "Successfully created user: organization={}, username={}",
             new_user.organization, new_user.username
@@ -321,6 +323,8 @@ impl DbService for RedisDbService {
         let user_json = serde_json::to_string(&user)?;
         conn.set::<_, _, ()>(&key, user_json).await?;
 
+        metrics::record_user_operation(organization, "update", true);
+
         info!(
             "Successfully updated user: organization={}, username={}",
             user.organization, user.username
@@ -354,15 +358,38 @@ impl DbService for RedisDbService {
             let group_key = Self::group_key(organization, group_name);
 
             // Get group
-            if let Ok(group_json) = conn.get::<_, String>(&group_key).await {
-                if let Ok(mut group) = serde_json::from_str::<crate::models::Group>(&group_json) {
-                    // Remove user from group
-                    if group.remove_member(username) {
-                        // Save updated group
-                        if let Ok(updated_json) = serde_json::to_string(&group) {
-                            let _ = conn.set::<_, _, ()>(&group_key, updated_json).await;
-                        }
-                    }
+            if let Ok(group_json) = conn.get::<_, String>(&group_key).await
+                && let Ok(mut group) = serde_json::from_str::<crate::models::Group>(&group_json)
+            {
+                // Remove user from group
+                if group.remove_member(username) {
+                    let updated_json = serde_json::to_string(&group).map_err(|err| {
+                        error!(
+                            group_key = %group_key,
+                            username = %username,
+                            error = %err,
+                            "Failed to serialize updated group after removing member"
+                        );
+                        AppError::Internal(format!(
+                            "Failed to serialize updated group for key {} after removing user {}: {}",
+                            group_key, username, err
+                        ))
+                    })?;
+
+                    conn.set::<_, _, ()>(&group_key, updated_json)
+                        .await
+                        .map_err(|err| {
+                            error!(
+                                group_key = %group_key,
+                                username = %username,
+                                error = %err,
+                                "Failed to persist updated group after removing member"
+                            );
+                            AppError::Database(format!(
+                                "Failed to persist updated group for key {} after removing user {}: {}",
+                                group_key, username, err
+                            ))
+                        })?;
                 }
             }
         }
@@ -379,6 +406,8 @@ impl DbService for RedisDbService {
 
         Self::sync_organization_counts(&mut conn, organization).await?;
         Self::cleanup_organization_if_empty(&mut conn, organization).await?;
+
+        metrics::record_user_operation(organization, "delete", true);
 
         info!(
             "Successfully deleted user: organization={}, username={}",
@@ -460,6 +489,8 @@ impl DbService for RedisDbService {
 
         Self::ensure_organization_registered(&mut conn, &group.organization).await?;
         Self::sync_organization_counts(&mut conn, &group.organization).await?;
+
+        metrics::record_group_operation(&group.organization, "create", true);
 
         info!(
             "Successfully created group: organization={}, name={}",
@@ -549,6 +580,8 @@ impl DbService for RedisDbService {
 
         Self::sync_organization_counts(&mut conn, organization).await?;
         Self::cleanup_organization_if_empty(&mut conn, organization).await?;
+
+        metrics::record_group_operation(organization, "delete", true);
 
         info!(
             "Successfully deleted group: organization={}, name={}",
