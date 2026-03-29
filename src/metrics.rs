@@ -86,17 +86,6 @@ pub mod custom {
         .expect("Failed to register user_operations counter")
     });
 
-    /// Legacy user operations counter (kept for backward compatibility)
-    #[allow(dead_code)]
-    pub static USER_OPERATIONS_LEGACY: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
-            "user_operations_total",
-            "Total number of user operations",
-            &["organization", "operation", "result"]
-        )
-        .expect("Failed to register legacy user_operations counter")
-    });
-
     /// Group operations counter (create, update, delete, membership changes)
     #[allow(dead_code)]
     pub static GROUP_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
@@ -106,17 +95,6 @@ pub mod custom {
             &["organization", "operation", "result"]
         )
         .expect("Failed to register group_operations counter")
-    });
-
-    /// Legacy group operations counter (kept for backward compatibility)
-    #[allow(dead_code)]
-    pub static GROUP_OPERATIONS_LEGACY: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
-            "group_operations_total",
-            "Total number of group operations",
-            &["organization", "operation", "result"]
-        )
-        .expect("Failed to register legacy group_operations counter")
     });
 
     /// Total number of organizations tracked by the service
@@ -175,9 +153,6 @@ pub fn record_user_operation(org: &str, operation: &str, success: bool) {
     custom::USER_OPERATIONS
         .with_label_values(&[org, operation, result])
         .inc();
-    custom::USER_OPERATIONS_LEGACY
-        .with_label_values(&[org, operation, result])
-        .inc();
 }
 
 /// Helper function to record group operations
@@ -185,9 +160,6 @@ pub fn record_user_operation(org: &str, operation: &str, success: bool) {
 pub fn record_group_operation(org: &str, operation: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::GROUP_OPERATIONS
-        .with_label_values(&[org, operation, result])
-        .inc();
-    custom::GROUP_OPERATIONS_LEGACY
         .with_label_values(&[org, operation, result])
         .inc();
 }

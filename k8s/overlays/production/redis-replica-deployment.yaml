@@ -39,6 +39,8 @@ spec:
             - redis-server
             - --requirepass
             - $(REDIS_PASSWORD)
+            - --masterauth
+            - $(REDIS_PASSWORD)
             - --maxmemory
             - 819mb
             - --maxmemory-policy

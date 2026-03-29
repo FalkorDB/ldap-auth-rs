@@ -23,7 +23,7 @@ pub struct RedisDbService {
 static RECONCILED_ORGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 const METRICS_RECONCILE_INTERVAL_SECS: u64 = 60;
-const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_millis(500);
+const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_millis(1500);
 
 type RedisConnection = deadpool_redis::Connection;
 type RedisReadFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -1037,16 +1037,24 @@ impl DbService for RedisDbService {
     }
 
     async fn connection_status(&self) -> Result<DbConnectionHealth> {
-        let primary_check =
-            Self::test_connection_with_timeout(&self.primary_pool, HEALTH_CHECK_TIMEOUT);
-        let replica_check = async {
-            match self.replica_pool.as_ref() {
+        // Spawn each check in its own task so a blocking pool.get() against the
+        // dead primary cannot starve the replica check on a shared Tokio worker.
+        let primary_pool = self.primary_pool.clone();
+        let primary_task = tokio::spawn(async move {
+            Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT).await
+        });
+
+        let replica_pool = self.replica_pool.clone();
+        let replica_task = tokio::spawn(async move {
+            match replica_pool.as_ref() {
                 Some(pool) => Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT).await,
                 None => false,
             }
-        };
+        });
 
-        let (primary_available, replica_available) = tokio::join!(primary_check, replica_check);
+        let (primary_result, replica_result) = tokio::join!(primary_task, replica_task);
+        let primary_available = primary_result.unwrap_or(false);
+        let replica_available = replica_result.unwrap_or(false);
 
         Ok(DbConnectionHealth {
             can_read: primary_available || replica_available,
