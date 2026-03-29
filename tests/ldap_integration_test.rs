@@ -267,12 +267,14 @@ async fn test_ldap_bind_uses_replica_when_primary_is_offline() {
         .expect("Failed to connect to replica Redis for seeding");
     let port = 13410;
 
+    const REPLICA_TEST_PASSWORD: &str = "replicapass123";
+
     flush_redis_db(&replica_url).await;
 
     let user_create = UserCreate {
         organization: "replicaorg".to_string(),
         username: "replicauser".to_string(),
-        password: "replicapass123".to_string(),
+        password: REPLICA_TEST_PASSWORD.to_string(),
         email: Some("replica@example.com".to_string()),
         full_name: None,
     };
@@ -289,7 +291,7 @@ async fn test_ldap_bind_uses_replica_when_primary_is_offline() {
         .expect("Failed to connect");
 
     let dn = "cn=replicauser,ou=replicaorg,dc=example,dc=com";
-    let bind_request = create_bind_request(1, dn, "replicapass123");
+    let bind_request = create_bind_request(1, dn, REPLICA_TEST_PASSWORD);
 
     stream
         .write_all(&bind_request)
