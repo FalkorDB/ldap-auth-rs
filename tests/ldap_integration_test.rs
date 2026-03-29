@@ -1,10 +1,16 @@
 use ldap_auth_rs::{
     db::DbService, ldap::LdapServer, models::UserCreate, redis_db::RedisDbService, tls,
 };
+use redis::AsyncCommands;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::ServerName;
 use std::io::BufReader;
 use std::sync::Arc;
+use testcontainers::{
+    GenericImage,
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::{Duration, sleep};
@@ -19,6 +25,25 @@ async fn setup_test_db() -> Arc<dyn DbService> {
             .await
             .expect("Failed to connect to Redis"),
     )
+}
+
+async fn flush_redis_db(redis_url: &str) {
+    let client = redis::Client::open(redis_url).expect("Failed to create Redis client");
+    let mut conn = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Failed to connect to Redis");
+    conn.flushdb::<()>()
+        .await
+        .expect("Failed to flush Redis DB");
+}
+
+async fn setup_replica_only_test_db(primary_url: &str, replica_url: &str) -> Arc<dyn DbService> {
+    Arc::new(
+        RedisDbService::new_with_replica(primary_url, Some(replica_url), Some(1))
+            .await
+            .expect("Failed to connect to replica-backed Redis service"),
+    ) as Arc<dyn DbService>
 }
 
 async fn start_ldap_server(db: Arc<dyn DbService>, port: u16) {
@@ -220,6 +245,71 @@ fn parse_bind_response(data: &[u8]) -> Result<u8, String> {
     }
 
     Err("Result code not found".to_string())
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn test_ldap_bind_uses_replica_when_primary_is_offline() {
+    let replica_container = GenericImage::new("redis", "7-alpine")
+        .with_exposed_port(6379.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
+        .start()
+        .await
+        .expect("Failed to start Redis replica container");
+    let replica_port = replica_container
+        .get_host_port_ipv4(6379.tcp())
+        .await
+        .expect("Failed to resolve Redis replica port");
+    let primary_url = "redis://127.0.0.1:1/0";
+    let replica_url = format!("redis://127.0.0.1:{}/0", replica_port);
+    let seeding_db = RedisDbService::new(&replica_url, Some(1))
+        .await
+        .expect("Failed to connect to replica Redis for seeding");
+    let port = 13410;
+
+    flush_redis_db(&replica_url).await;
+
+    let user_create = UserCreate {
+        organization: "replicaorg".to_string(),
+        username: "replicauser".to_string(),
+        password: "replicapass123".to_string(),
+        email: Some("replica@example.com".to_string()),
+        full_name: None,
+    };
+    seeding_db
+        .create_user(user_create)
+        .await
+        .expect("Failed to create replica-backed user");
+
+    let db = setup_replica_only_test_db(primary_url, &replica_url).await;
+    start_ldap_server(db, port).await;
+
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .expect("Failed to connect");
+
+    let dn = "cn=replicauser,ou=replicaorg,dc=example,dc=com";
+    let bind_request = create_bind_request(1, dn, "replicapass123");
+
+    stream
+        .write_all(&bind_request)
+        .await
+        .expect("Failed to send bind");
+
+    let mut response = vec![0u8; 1024];
+    let n = stream
+        .read(&mut response)
+        .await
+        .expect("Failed to read response");
+    let response = &response[..n];
+
+    let result_code = parse_bind_response(response).expect("Failed to parse response");
+    assert_eq!(
+        result_code, 0,
+        "Bind should succeed via replica when the primary is offline"
+    );
+
+    flush_redis_db(&replica_url).await;
 }
 
 #[tokio::test]

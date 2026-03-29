@@ -2,6 +2,14 @@ use crate::error::Result;
 use crate::models::{Group, GroupCreate, GroupUpdate, User, UserCreate, UserUpdate};
 use async_trait::async_trait;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DbConnectionHealth {
+    pub can_read: bool,
+    pub can_write: bool,
+    pub primary_available: bool,
+    pub replica_available: bool,
+}
+
 /// Database service trait for abstracting storage operations
 /// This allows for easy testing and switching between different storage backends
 #[async_trait]
@@ -89,6 +97,17 @@ pub trait DbService: Send + Sync {
 
     /// Health check for the database connection
     async fn health_check(&self) -> Result<bool>;
+
+    /// Detailed health information for read/write availability.
+    async fn connection_status(&self) -> Result<DbConnectionHealth> {
+        let healthy = self.health_check().await?;
+        Ok(DbConnectionHealth {
+            can_read: healthy,
+            can_write: healthy,
+            primary_available: healthy,
+            replica_available: false,
+        })
+    }
 }
 
 #[cfg(test)]
