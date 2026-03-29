@@ -238,7 +238,7 @@ async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, A
             primary_available: false,
             replica_available: false,
         });
-    let redis_healthy = connection_status.can_write;
+    let redis_healthy = connection_status.can_read || connection_status.can_write;
 
     let status = if connection_status.can_write {
         "healthy"
@@ -257,7 +257,7 @@ async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, A
         timestamp: Utc::now().to_rfc3339(),
     };
 
-    let http_status = if connection_status.can_write {
+    let http_status = if connection_status.can_read || connection_status.can_write {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE

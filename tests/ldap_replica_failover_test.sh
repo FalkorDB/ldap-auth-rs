@@ -116,7 +116,7 @@ assert_health_degraded() {
   for _ in $(seq 1 20); do
     local status_code
     status_code=$(container_api_with_status "http://127.0.0.1:8080/health" 2>/dev/null || true)
-    if [[ "$status_code" == "503" ]]; then
+    if [[ "$status_code" == "200" ]]; then
       local body
       body=$(docker compose -f "$_TEST_COMPOSE" exec -T ldap-auth cat /tmp/ldap-replica-health.out 2>/dev/null || true)
       if echo "$body" | grep -q '"status":"degraded"'; then
