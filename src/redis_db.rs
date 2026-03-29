@@ -155,8 +155,8 @@ impl RedisDbService {
         let cfg = PoolConfig::from_url(redis_url);
         cfg.create_pool(Some(Runtime::Tokio1)).map_err(|err| {
             AppError::Database(format!(
-                "Failed to create Redis pool for {}: {}",
-                redis_url, err
+                "Failed to create Redis pool: {}",
+                err
             ))
         })
     }
