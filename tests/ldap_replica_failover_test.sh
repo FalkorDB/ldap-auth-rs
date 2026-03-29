@@ -63,6 +63,10 @@ container_api() {
   docker compose -f "$_TEST_COMPOSE" exec -T ldap-auth curl -fsS "$@"
 }
 
+container_api_with_status() {
+  docker compose -f "$_TEST_COMPOSE" exec -T ldap-auth curl -sS -o /tmp/ldap-replica-health.out -w "%{http_code}" "$@"
+}
+
 wait_for_api() {
   for _ in $(seq 1 60); do
     if container_api "http://127.0.0.1:8080/health" >/dev/null; then
@@ -110,8 +114,11 @@ JSON
 
 assert_health_degraded() {
   for _ in $(seq 1 20); do
-    local body
-    if body=$(container_api "http://127.0.0.1:8080/health" 2>/dev/null); then
+    local status_code
+    status_code=$(container_api_with_status "http://127.0.0.1:8080/health" 2>/dev/null || true)
+    if [[ "$status_code" == "503" ]]; then
+      local body
+      body=$(docker compose -f "$_TEST_COMPOSE" exec -T ldap-auth cat /tmp/ldap-replica-health.out 2>/dev/null || true)
       if echo "$body" | grep -q '"status":"degraded"'; then
         return 0
       fi
@@ -119,6 +126,7 @@ assert_health_degraded() {
     sleep 1
   done
   echo "Health status did not transition to degraded within 20 seconds" >&2
+  docker compose -f "$_TEST_COMPOSE" exec -T ldap-auth cat /tmp/ldap-replica-health.out >&2 2>/dev/null || true
   return 1
 }
 
