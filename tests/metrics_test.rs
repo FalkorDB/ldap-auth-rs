@@ -208,8 +208,8 @@ async fn test_custom_metrics_are_tracked() {
     metrics::record_auth_attempt("test-org", true);
     metrics::record_auth_attempt("test-org", false);
     metrics::record_ldap_bind("test-org", true);
-    metrics::record_user_operation("test-org", "create", true);
-    metrics::record_group_operation("test-org", "add_member", false);
+    metrics::record_user_operation("test-org", "total", 42);
+    metrics::record_group_operation("test-org", "total", 7);
     metrics::set_organizations_count(1);
     metrics::set_users_count("test-org", 42);
     metrics::set_groups_count("test-org", 7);

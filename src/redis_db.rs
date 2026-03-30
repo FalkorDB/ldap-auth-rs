@@ -135,6 +135,10 @@ impl RedisDbService {
 
         metrics::set_users_count(organization, users_count as i64);
         metrics::set_groups_count(organization, groups_count as i64);
+
+        // Sync operation counts as gauges from DB metadata if available, otherwise just use counts
+        metrics::record_user_operation(organization, "total", users_count as i64);
+        metrics::record_group_operation(organization, "total", groups_count as i64);
         Ok(())
     }
 
@@ -259,8 +263,6 @@ impl DbService for RedisDbService {
         Self::ensure_organization_registered(&mut conn, &user.organization).await?;
         Self::sync_organization_counts(&mut conn, &user.organization).await?;
 
-        metrics::record_user_operation(&user.organization, "create", true);
-
         info!(
             "Successfully created user: organization={}, username={}",
             new_user.organization, new_user.username
@@ -322,8 +324,6 @@ impl DbService for RedisDbService {
         // Save updated user
         let user_json = serde_json::to_string(&user)?;
         conn.set::<_, _, ()>(&key, user_json).await?;
-
-        metrics::record_user_operation(organization, "update", true);
 
         info!(
             "Successfully updated user: organization={}, username={}",
@@ -407,8 +407,6 @@ impl DbService for RedisDbService {
         Self::sync_organization_counts(&mut conn, organization).await?;
         Self::cleanup_organization_if_empty(&mut conn, organization).await?;
 
-        metrics::record_user_operation(organization, "delete", true);
-
         info!(
             "Successfully deleted user: organization={}, username={}",
             organization, username
@@ -489,8 +487,6 @@ impl DbService for RedisDbService {
 
         Self::ensure_organization_registered(&mut conn, &group.organization).await?;
         Self::sync_organization_counts(&mut conn, &group.organization).await?;
-
-        metrics::record_group_operation(&group.organization, "create", true);
 
         info!(
             "Successfully created group: organization={}, name={}",
@@ -580,8 +576,6 @@ impl DbService for RedisDbService {
 
         Self::sync_organization_counts(&mut conn, organization).await?;
         Self::cleanup_organization_if_empty(&mut conn, organization).await?;
-
-        metrics::record_group_operation(organization, "delete", true);
 
         info!(
             "Successfully deleted group: organization={}, name={}",
