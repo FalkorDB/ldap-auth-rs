@@ -3,10 +3,12 @@ use chrono::Utc;
 use deadpool_redis::{Config as PoolConfig, Pool, Runtime, redis::AsyncCommands};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-use crate::db::DbService;
+use crate::db::{DbConnectionHealth, DbService};
 use crate::error::{AppError, Result};
 use crate::metrics;
 use crate::models::{Group, GroupCreate, GroupUpdate, User, UserCreate, UserUpdate};
@@ -14,78 +16,149 @@ use crate::password::{hash_password, verify_password};
 
 /// Redis-based implementation of the DbService trait
 pub struct RedisDbService {
-    pool: Pool,
+    primary_pool: Pool,
+    replica_pool: Option<Pool>,
 }
 
 static RECONCILED_ORGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 const METRICS_RECONCILE_INTERVAL_SECS: u64 = 60;
+const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_millis(1500);
+
+type RedisConnection = deadpool_redis::Connection;
+type RedisReadFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 impl RedisDbService {
     /// Create a new RedisDbService from a Redis URL with retry logic
+    #[allow(dead_code)]
     pub async fn new(redis_url: &str, retry: Option<u32>) -> Result<Self> {
+        Self::new_with_replica(redis_url, None, retry).await
+    }
+
+    /// Create a new RedisDbService with an optional read-only replica URL.
+    pub async fn new_with_replica(
+        redis_url: &str,
+        replica_url: Option<&str>,
+        retry: Option<u32>,
+    ) -> Result<Self> {
         let retry = retry.unwrap_or(10);
-        Self::new_with_retry(redis_url, retry, tokio::time::Duration::from_secs(2)).await
+        Self::new_with_replica_and_retry(
+            redis_url,
+            replica_url,
+            retry,
+            tokio::time::Duration::from_secs(2),
+        )
+        .await
     }
 
     /// Create a new RedisDbService with configurable retry parameters
+    #[allow(dead_code)]
     pub async fn new_with_retry(
         redis_url: &str,
         max_retries: u32,
         initial_delay: tokio::time::Duration,
     ) -> Result<Self> {
+        Self::new_with_replica_and_retry(redis_url, None, max_retries, initial_delay).await
+    }
+
+    /// Create a new RedisDbService with replica-aware retry parameters.
+    pub async fn new_with_replica_and_retry(
+        redis_url: &str,
+        replica_url: Option<&str>,
+        max_retries: u32,
+        initial_delay: tokio::time::Duration,
+    ) -> Result<Self> {
+        let primary_pool = Self::create_pool(redis_url)?;
+        let replica_pool = match replica_url {
+            Some(url) => Some(Self::create_pool(url)?),
+            None => None,
+        };
+
         // Retry connection with exponential backoff
         let mut retries = 0;
         let mut delay = initial_delay;
 
         loop {
-            // Recreate the pool on each attempt to force DNS re-resolution
-            let cfg = PoolConfig::from_url(redis_url);
-            let pool = match cfg.create_pool(Some(Runtime::Tokio1)) {
-                Ok(pool) => pool,
-                Err(e) => {
-                    retries += 1;
-                    if retries >= max_retries {
-                        return Err(AppError::Database(format!(
-                            "Failed to create Redis pool after {} attempts: {}",
-                            max_retries, e
-                        )));
-                    }
-                    warn!(
-                        "Failed to create Redis pool (attempt {}/{}): {}. Retrying in {:?}...",
-                        retries, max_retries, e, delay
-                    );
-                    tokio::time::sleep(delay).await;
-                    delay = std::cmp::min(delay * 2, tokio::time::Duration::from_secs(30));
-                    continue;
+            let primary_result =
+                Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT).await;
+            let replica_result = match replica_pool.as_ref() {
+                Some(pool) => {
+                    Some(Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT).await)
                 }
+                None => None,
             };
 
-            match Self::test_connection(&pool).await {
-                Ok(_) => {
-                    info!("Successfully connected to Redis");
-                    let service = Self { pool: pool.clone() };
-                    service.start_metrics_reconciler();
-                    return Ok(service);
+            if primary_result.is_ok()
+                || replica_result.as_ref().is_some_and(|result| result.is_ok())
+            {
+                if primary_result.is_ok() {
+                    info!("Successfully connected to Redis primary");
                 }
-                Err(e) => {
-                    retries += 1;
-                    if retries >= max_retries {
-                        return Err(AppError::Database(format!(
-                            "Failed to connect to Redis after {} attempts: {}",
-                            max_retries, e
-                        )));
-                    }
-                    warn!(
-                        "Failed to connect to Redis (attempt {}/{}): {}. Retrying in {:?}...",
-                        retries, max_retries, e, delay
-                    );
-                    tokio::time::sleep(delay).await;
-                    // Exponential backoff with max 30 seconds
-                    delay = std::cmp::min(delay * 2, tokio::time::Duration::from_secs(30));
+
+                match replica_result.as_ref() {
+                    Some(Ok(_)) => info!("Successfully connected to Redis replica"),
+                    Some(Err(err)) => warn!(
+                        "Redis replica is configured but unavailable during startup: {}",
+                        err
+                    ),
+                    None => {}
                 }
+
+                if primary_result.is_err()
+                    && replica_result.as_ref().is_some_and(|result| result.is_ok())
+                {
+                    warn!("Starting in read-only degraded mode because Redis primary is offline");
+                }
+
+                let service = Self {
+                    primary_pool,
+                    replica_pool,
+                };
+                service.start_metrics_reconciler();
+                return Ok(service);
             }
+
+            retries += 1;
+            let primary_error = primary_result
+                .err()
+                .map(|err| err.to_string())
+                .unwrap_or_default();
+            let replica_error = replica_result
+                .and_then(|result| result.err())
+                .map(|err| err.to_string());
+
+            if retries >= max_retries {
+                let mut message = format!(
+                    "Failed to connect to Redis primary after {} attempts: {}",
+                    max_retries, primary_error
+                );
+                if let Some(replica_error) = replica_error {
+                    message.push_str(&format!("; replica also unavailable: {}", replica_error));
+                }
+                return Err(AppError::Database(message));
+            }
+
+            if let Some(replica_error) = replica_error {
+                warn!(
+                    "Redis primary and replica unavailable (attempt {}/{}): primary={}, replica={}. Retrying in {:?}...",
+                    retries, max_retries, primary_error, replica_error, delay
+                );
+            } else {
+                warn!(
+                    "Redis primary unavailable (attempt {}/{}): {}. Retrying in {:?}...",
+                    retries, max_retries, primary_error, delay
+                );
+            }
+
+            tokio::time::sleep(delay).await;
+            delay = std::cmp::min(delay * 2, tokio::time::Duration::from_secs(30));
         }
+    }
+
+    fn create_pool(redis_url: &str) -> Result<Pool> {
+        let cfg = PoolConfig::from_url(redis_url);
+        cfg.create_pool(Some(Runtime::Tokio1))
+            .map_err(|err| AppError::Database(format!("Failed to create Redis pool: {}", err)))
     }
 
     /// Test the Redis connection
@@ -100,6 +173,111 @@ impl RedisDbService {
             .map_err(|e| AppError::Database(format!("Failed to ping Redis: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Test the Redis connection with a timeout to keep probes bounded.
+    async fn test_connection_with_timeout(
+        pool: &Pool,
+        timeout: tokio::time::Duration,
+    ) -> Result<()> {
+        match tokio::time::timeout(timeout, Self::test_connection(pool)).await {
+            Ok(result) => result,
+            Err(_) => Err(AppError::Database(format!(
+                "Redis probe timed out after {:?}",
+                timeout
+            ))),
+        }
+    }
+
+    async fn get_primary_conn(&self) -> Result<RedisConnection> {
+        self.primary_pool.get().await.map_err(AppError::from)
+    }
+
+    async fn get_replica_conn(&self) -> Result<RedisConnection> {
+        let replica_pool = self
+            .replica_pool
+            .as_ref()
+            .ok_or_else(|| AppError::Database("Redis replica is not configured".to_string()))?;
+
+        replica_pool.get().await.map_err(AppError::from)
+    }
+
+    async fn get_read_conn_from_pools(
+        primary_pool: &Pool,
+        replica_pool: Option<&Pool>,
+    ) -> Result<RedisConnection> {
+        match primary_pool.get().await {
+            Ok(conn) => Ok(conn),
+            Err(primary_err) => {
+                if let Some(replica_pool) = replica_pool {
+                    warn!(
+                        error = %primary_err,
+                        "Primary Redis unavailable while acquiring read connection, trying replica"
+                    );
+                    match replica_pool.get().await {
+                        Ok(conn) => Ok(conn),
+                        Err(replica_err) => Err(AppError::Database(format!(
+                            "Failed to get readable Redis connection; primary: {}, replica: {}",
+                            primary_err, replica_err
+                        ))),
+                    }
+                } else {
+                    Err(AppError::from(primary_err))
+                }
+            }
+        }
+    }
+
+    fn should_try_replica(error: &AppError) -> bool {
+        matches!(
+            error,
+            AppError::Database(_) | AppError::Redis(_) | AppError::Pool(_)
+        )
+    }
+
+    async fn with_read_fallback<T, F>(
+        &self,
+        operation_name: &'static str,
+        operation: F,
+    ) -> Result<T>
+    where
+        T: Send,
+        F: for<'a> Fn(&'a mut RedisConnection) -> RedisReadFuture<'a, T> + Send + Sync,
+    {
+        match self.primary_pool.get().await {
+            Ok(mut conn) => match operation(&mut conn).await {
+                Ok(result) => Ok(result),
+                Err(err) if self.replica_pool.is_some() && Self::should_try_replica(&err) => {
+                    warn!(
+                        operation = operation_name,
+                        error = %err,
+                        "Read against Redis primary failed, retrying against replica"
+                    );
+                    let mut replica_conn = self.get_replica_conn().await?;
+                    operation(&mut replica_conn).await
+                }
+                Err(err) => Err(err),
+            },
+            Err(primary_err) => {
+                if self.replica_pool.is_some() {
+                    warn!(
+                        operation = operation_name,
+                        error = %primary_err,
+                        "Primary Redis unavailable, using replica for read"
+                    );
+                    let mut replica_conn =
+                        self.get_replica_conn().await.map_err(|replica_err| {
+                            AppError::Database(format!(
+                                "Failed to get readable Redis connection; primary: {}, replica: {}",
+                                primary_err, replica_err
+                            ))
+                        })?;
+                    operation(&mut replica_conn).await
+                } else {
+                    Err(AppError::from(primary_err))
+                }
+            }
+        }
     }
 
     fn user_key(organization: &str, username: &str) -> String {
@@ -177,9 +355,10 @@ impl RedisDbService {
     }
 
     fn start_metrics_reconciler(&self) {
-        let pool = self.pool.clone();
+        let primary_pool = self.primary_pool.clone();
+        let replica_pool = self.replica_pool.clone();
         tokio::spawn(async move {
-            if let Err(e) = Self::reconcile_metrics(&pool).await {
+            if let Err(e) = Self::reconcile_metrics(&primary_pool, replica_pool.as_ref()).await {
                 warn!("Initial metrics reconciliation failed: {}", e);
             }
 
@@ -191,15 +370,16 @@ impl RedisDbService {
 
             loop {
                 interval.tick().await;
-                if let Err(e) = Self::reconcile_metrics(&pool).await {
+                if let Err(e) = Self::reconcile_metrics(&primary_pool, replica_pool.as_ref()).await
+                {
                     warn!("Periodic metrics reconciliation failed: {}", e);
                 }
             }
         });
     }
 
-    async fn reconcile_metrics(pool: &Pool) -> Result<()> {
-        let mut conn = pool.get().await?;
+    async fn reconcile_metrics(primary_pool: &Pool, replica_pool: Option<&Pool>) -> Result<()> {
+        let mut conn = Self::get_read_conn_from_pools(primary_pool, replica_pool).await?;
         let organizations: Vec<String> = conn.smembers(Self::organizations_key()).await?;
 
         for organization in &organizations {
@@ -218,6 +398,106 @@ impl RedisDbService {
 
         Ok(())
     }
+
+    async fn get_user_with_conn(
+        conn: &mut RedisConnection,
+        organization: &str,
+        username: &str,
+    ) -> Result<User> {
+        let key = Self::user_key(organization, username);
+        let user_json: Option<String> = conn.get(&key).await?;
+
+        match user_json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Err(AppError::NotFound(format!(
+                "User {}/{} not found",
+                organization, username
+            ))),
+        }
+    }
+
+    async fn list_users_with_conn(
+        conn: &mut RedisConnection,
+        organization: &str,
+    ) -> Result<Vec<User>> {
+        let usernames: Vec<String> = conn.smembers(Self::org_users_key(organization)).await?;
+
+        let mut users = Vec::new();
+        for username in usernames {
+            match Self::get_user_with_conn(conn, organization, &username).await {
+                Ok(user) => users.push(user),
+                Err(AppError::NotFound(_)) => warn!(
+                    "User {} listed in organization {} but not found in database",
+                    username, organization
+                ),
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(users)
+    }
+
+    async fn get_group_with_conn(
+        conn: &mut RedisConnection,
+        organization: &str,
+        name: &str,
+    ) -> Result<Group> {
+        let key = Self::group_key(organization, name);
+        let group_json: Option<String> = conn.get(&key).await?;
+
+        match group_json {
+            Some(json) => Ok(serde_json::from_str(&json)?),
+            None => Err(AppError::NotFound(format!(
+                "Group {}/{} not found",
+                organization, name
+            ))),
+        }
+    }
+
+    async fn list_groups_with_conn(
+        conn: &mut RedisConnection,
+        organization: &str,
+    ) -> Result<Vec<Group>> {
+        let group_names: Vec<String> = conn.smembers(Self::org_groups_key(organization)).await?;
+
+        let mut groups = Vec::new();
+        for name in group_names {
+            match Self::get_group_with_conn(conn, organization, &name).await {
+                Ok(group) => groups.push(group),
+                Err(AppError::NotFound(_)) => warn!(
+                    "Group {} listed in organization {} but not found in database",
+                    name, organization
+                ),
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(groups)
+    }
+
+    async fn get_user_groups_with_conn(
+        conn: &mut RedisConnection,
+        organization: &str,
+        username: &str,
+    ) -> Result<Vec<Group>> {
+        let group_names: Vec<String> = conn
+            .smembers(Self::user_groups_key(organization, username))
+            .await?;
+
+        let mut groups = Vec::new();
+        for name in group_names {
+            match Self::get_group_with_conn(conn, organization, &name).await {
+                Ok(group) => groups.push(group),
+                Err(AppError::NotFound(_)) => warn!(
+                    "Group {} listed for user {} in organization {} but not found in database",
+                    name, username, organization
+                ),
+                Err(err) => return Err(err),
+            }
+        }
+
+        Ok(groups)
+    }
 }
 
 #[async_trait]
@@ -227,7 +507,7 @@ impl DbService for RedisDbService {
             "Creating user: organization={}, username={}",
             user.organization, user.username
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(&user.organization, &user.username);
 
         // Check if user already exists
@@ -275,20 +555,14 @@ impl DbService for RedisDbService {
             "Getting user: organization={}, username={}",
             organization, username
         );
-        let mut conn = self.pool.get().await?;
-        let key = Self::user_key(organization, username);
-
-        let user_json: Option<String> = conn.get(&key).await?;
-        match user_json {
-            Some(json) => {
-                let user: User = serde_json::from_str(&json)?;
-                Ok(user)
-            }
-            None => Err(AppError::NotFound(format!(
-                "User {}/{} not found",
-                organization, username
-            ))),
-        }
+        let organization_owned = organization.to_string();
+        let username_owned = username.to_string();
+        self.with_read_fallback("get_user", move |conn| {
+            let organization = organization_owned.clone();
+            let username = username_owned.clone();
+            Box::pin(async move { Self::get_user_with_conn(conn, &organization, &username).await })
+        })
+        .await
     }
 
     async fn update_user(
@@ -303,11 +577,11 @@ impl DbService for RedisDbService {
             username,
             update.password.is_some()
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(organization, username);
 
-        // Get existing user
-        let mut user = self.get_user(organization, username).await?;
+        // Get existing user from the primary for write consistency.
+        let mut user = Self::get_user_with_conn(&mut conn, organization, username).await?;
 
         // Update fields
         if let Some(password) = update.password {
@@ -337,7 +611,7 @@ impl DbService for RedisDbService {
             "Deleting user: organization={}, username={}",
             organization, username
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(organization, username);
 
         // Check if user exists
@@ -416,22 +690,13 @@ impl DbService for RedisDbService {
 
     async fn list_users(&self, organization: &str) -> Result<Vec<User>> {
         info!("Listing users: organization={}", organization);
-        let mut conn = self.pool.get().await?;
-        let org_users_key = Self::org_users_key(organization);
-
-        let usernames: Vec<String> = conn.smembers(&org_users_key).await?;
-
-        let mut users = Vec::new();
-        for username in usernames {
-            if let Ok(user) = self.get_user(organization, &username).await {
-                users.push(user);
-            } else {
-                warn!(
-                    "User {} listed in organization {} but not found in database",
-                    username, organization
-                );
-            }
-        }
+        let organization_owned = organization.to_string();
+        let users = self
+            .with_read_fallback("list_users", move |conn| {
+                let organization = organization_owned.clone();
+                Box::pin(async move { Self::list_users_with_conn(conn, &organization).await })
+            })
+            .await?;
 
         info!(
             "Successfully listed {} users: organization={}",
@@ -451,7 +716,17 @@ impl DbService for RedisDbService {
             "Verifying user password: organization={}, username={}",
             organization, username
         );
-        let user = self.get_user(organization, username).await?;
+        let organization_owned = organization.to_string();
+        let username_owned = username.to_string();
+        let user = self
+            .with_read_fallback("verify_user_password", move |conn| {
+                let organization = organization_owned.clone();
+                let username = username_owned.clone();
+                Box::pin(
+                    async move { Self::get_user_with_conn(conn, &organization, &username).await },
+                )
+            })
+            .await?;
         let result = verify_password(password, &user.password_hash)?;
         Ok(result)
     }
@@ -461,7 +736,7 @@ impl DbService for RedisDbService {
             "Creating group: organization={}, name={}, description={:?}",
             group.organization, group.name, group.description
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::group_key(&group.organization, &group.name);
 
         // Check if group already exists
@@ -500,20 +775,14 @@ impl DbService for RedisDbService {
             "Getting group: organization={}, name={}",
             organization, name
         );
-        let mut conn = self.pool.get().await?;
-        let key = Self::group_key(organization, name);
-
-        let group_json: Option<String> = conn.get(&key).await?;
-        match group_json {
-            Some(json) => {
-                let group: Group = serde_json::from_str(&json)?;
-                Ok(group)
-            }
-            None => Err(AppError::NotFound(format!(
-                "Group {}/{} not found",
-                organization, name
-            ))),
-        }
+        let organization_owned = organization.to_string();
+        let name_owned = name.to_string();
+        self.with_read_fallback("get_group", move |conn| {
+            let organization = organization_owned.clone();
+            let name = name_owned.clone();
+            Box::pin(async move { Self::get_group_with_conn(conn, &organization, &name).await })
+        })
+        .await
     }
 
     async fn update_group(
@@ -526,11 +795,11 @@ impl DbService for RedisDbService {
             "Updating group: organization={}, name={}, description={:?}",
             organization, name, update.description
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::group_key(organization, name);
 
-        // Get existing group
-        let mut group = self.get_group(organization, name).await?;
+        // Get existing group from the primary for write consistency.
+        let mut group = Self::get_group_with_conn(&mut conn, organization, name).await?;
 
         // Update fields
         if let Some(description) = update.description {
@@ -554,11 +823,11 @@ impl DbService for RedisDbService {
             "Deleting group: organization={}, name={}",
             organization, name
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
         let key = Self::group_key(organization, name);
 
         // Check if group exists
-        let group = self.get_group(organization, name).await?;
+        let group = Self::get_group_with_conn(&mut conn, organization, name).await?;
 
         // Remove group from all users' group sets
         for username in &group.members {
@@ -586,19 +855,12 @@ impl DbService for RedisDbService {
 
     async fn list_groups(&self, organization: &str) -> Result<Vec<Group>> {
         info!("Listing groups: organization={}", organization);
-        let mut conn = self.pool.get().await?;
-        let org_groups_key = Self::org_groups_key(organization);
-
-        let group_names: Vec<String> = conn.smembers(&org_groups_key).await?;
-
-        let mut groups = Vec::new();
-        for name in group_names {
-            if let Ok(group) = self.get_group(organization, &name).await {
-                groups.push(group);
-            }
-        }
-
-        Ok(groups)
+        let organization_owned = organization.to_string();
+        self.with_read_fallback("list_groups", move |conn| {
+            let organization = organization_owned.clone();
+            Box::pin(async move { Self::list_groups_with_conn(conn, &organization).await })
+        })
+        .await
     }
 
     async fn add_user_to_group(
@@ -611,13 +873,13 @@ impl DbService for RedisDbService {
             "Adding user to group: organization={}, group={}, username={}",
             organization, group_name, username
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
 
         // Verify user exists
-        self.get_user(organization, username).await?;
+        Self::get_user_with_conn(&mut conn, organization, username).await?;
 
         // Get group
-        let mut group = self.get_group(organization, group_name).await?;
+        let mut group = Self::get_group_with_conn(&mut conn, organization, group_name).await?;
 
         // Add user to group
         if !group.add_member(username.to_string()) {
@@ -653,10 +915,10 @@ impl DbService for RedisDbService {
             "Removing user from group: organization={}, group={}, username={}",
             organization, group_name, username
         );
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_primary_conn().await?;
 
         // Get group
-        let mut group = self.get_group(organization, group_name).await?;
+        let mut group = Self::get_group_with_conn(&mut conn, organization, group_name).await?;
 
         // Remove user from group
         if !group.remove_member(username) {
@@ -687,17 +949,17 @@ impl DbService for RedisDbService {
             "Getting user groups: organization={}, username={}",
             organization, username
         );
-        let mut conn = self.pool.get().await?;
-        let user_groups_key = Self::user_groups_key(organization, username);
-
-        let group_names: Vec<String> = conn.smembers(&user_groups_key).await?;
-
-        let mut groups = Vec::new();
-        for name in group_names {
-            if let Ok(group) = self.get_group(organization, &name).await {
-                groups.push(group);
-            }
-        }
+        let organization_owned = organization.to_string();
+        let username_owned = username.to_string();
+        let groups = self
+            .with_read_fallback("get_user_groups", move |conn| {
+                let organization = organization_owned.clone();
+                let username = username_owned.clone();
+                Box::pin(async move {
+                    Self::get_user_groups_with_conn(conn, &organization, &username).await
+                })
+            })
+            .await?;
 
         info!(
             "Successfully retrieved {} groups for user: organization={}, username={}",
@@ -713,8 +975,13 @@ impl DbService for RedisDbService {
             "Searching users: organization={}, filter={}",
             organization, filter
         );
-        // Simple implementation: list all users and filter by username or email
-        let users = self.list_users(organization).await?;
+        let organization_owned = organization.to_string();
+        let users = self
+            .with_read_fallback("search_users", move |conn| {
+                let organization = organization_owned.clone();
+                Box::pin(async move { Self::list_users_with_conn(conn, &organization).await })
+            })
+            .await?;
 
         let filtered: Vec<User> = users
             .into_iter()
@@ -739,8 +1006,13 @@ impl DbService for RedisDbService {
             "Searching groups: organization={}, filter={}",
             organization, filter
         );
-        // Simple implementation: list all groups and filter by name or description
-        let groups = self.list_groups(organization).await?;
+        let organization_owned = organization.to_string();
+        let groups = self
+            .with_read_fallback("search_groups", move |conn| {
+                let organization = organization_owned.clone();
+                Box::pin(async move { Self::list_groups_with_conn(conn, &organization).await })
+            })
+            .await?;
 
         let filtered: Vec<Group> = groups
             .into_iter()
@@ -761,13 +1033,42 @@ impl DbService for RedisDbService {
 
     async fn health_check(&self) -> Result<bool> {
         info!("Performing database health check");
-        let mut conn = self.pool.get().await?;
-        let result: deadpool_redis::redis::RedisResult<String> = deadpool_redis::redis::cmd("PING")
-            .query_async(&mut conn)
-            .await;
-        let is_healthy = result.is_ok();
+        let status = self.connection_status().await?;
+        let is_healthy = status.can_read;
         info!("Database health check result: {}", is_healthy);
         Ok(is_healthy)
+    }
+
+    async fn connection_status(&self) -> Result<DbConnectionHealth> {
+        // Spawn each check in its own task so a blocking pool.get() against the
+        // dead primary cannot starve the replica check on a shared Tokio worker.
+        let primary_pool = self.primary_pool.clone();
+        let primary_task = tokio::spawn(async move {
+            Self::test_connection_with_timeout(&primary_pool, HEALTH_CHECK_TIMEOUT)
+                .await
+                .is_ok()
+        });
+
+        let replica_pool = self.replica_pool.clone();
+        let replica_task = tokio::spawn(async move {
+            match replica_pool.as_ref() {
+                Some(pool) => Self::test_connection_with_timeout(pool, HEALTH_CHECK_TIMEOUT)
+                    .await
+                    .is_ok(),
+                None => false,
+            }
+        });
+
+        let (primary_result, replica_result) = tokio::join!(primary_task, replica_task);
+        let primary_available = primary_result.unwrap_or(false);
+        let replica_available = replica_result.unwrap_or(false);
+
+        Ok(DbConnectionHealth {
+            can_read: primary_available || replica_available,
+            can_write: primary_available,
+            primary_available,
+            replica_available,
+        })
     }
 }
 

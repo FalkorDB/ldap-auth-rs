@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-replica
+  labels:
+    app.kubernetes.io/part-of: ldap-auth
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/name: redis-replica
+spec:
+  serviceName: redis-replica-headless
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: cache
+      app.kubernetes.io/name: redis-replica
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: ldap-auth
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/name: redis-replica
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      volumes:
+        - name: redis-config
+          emptyDir: {}
+
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --masterauth
+            - $(REDIS_PASSWORD)
+            - --maxmemory
+            - 819mb
+            - --maxmemory-policy
+            - allkeys-lru
+            - --save
+            - "900 1"
+            - --save
+            - "300 10"
+            - --save
+            - "60 10000"
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --replicaof
+            - redis-service
+            - "6379"
+
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ldap-auth-secrets
+                  key: REDIS_PASSWORD
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: ldap-auth-secrets
+                  key: REDIS_PASSWORD
+
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli ping | grep PONG
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli ping | grep PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: redis-replica-data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /tmp
+
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-replica-data
+      labels:
+        app.kubernetes.io/part-of: ldap-auth
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 20Gi

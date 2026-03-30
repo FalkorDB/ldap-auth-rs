@@ -52,6 +52,9 @@ struct ApiResponse<T> {
 struct HealthStatus {
     status: String, // "healthy", "degraded", "unhealthy"
     redis: bool,
+    redis_primary: bool,
+    redis_replica: bool,
+    read_only: bool,
     timestamp: String,
 }
 
@@ -226,10 +229,21 @@ async fn get_user_groups(
 
 // Health check
 async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    let redis_healthy = db.health_check().await.unwrap_or(false);
+    let connection_status = db
+        .connection_status()
+        .await
+        .unwrap_or(crate::db::DbConnectionHealth {
+            can_read: false,
+            can_write: false,
+            primary_available: false,
+            replica_available: false,
+        });
+    let redis_healthy = connection_status.can_read || connection_status.can_write;
 
-    let status = if redis_healthy {
+    let status = if connection_status.can_write {
         "healthy"
+    } else if connection_status.can_read {
+        "degraded"
     } else {
         "unhealthy"
     };
@@ -237,10 +251,13 @@ async fn health_check(State(db): State<AppState>) -> Result<impl IntoResponse, A
     let health = HealthStatus {
         status: status.to_string(),
         redis: redis_healthy,
+        redis_primary: connection_status.primary_available,
+        redis_replica: connection_status.replica_available,
+        read_only: connection_status.can_read && !connection_status.can_write,
         timestamp: Utc::now().to_rfc3339(),
     };
 
-    let http_status = if redis_healthy {
+    let http_status = if connection_status.can_read || connection_status.can_write {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE

@@ -5,6 +5,8 @@ namespace: ldap-auth
 
 resources:
 - ../../base
+- redis-replica-deployment.yaml
+- redis-replica-service.yaml
 # Ingress disabled by default (internal service)
 # Uncomment if external access is required:
 # - ingress.yaml
@@ -22,6 +24,8 @@ configMapGenerator:
   - RUST_LOG=ldap_auth_rs=info
   - CACHE_TTL=600
   - CACHE_MAX_SIZE=50000
+  - REDIS_REPLICA_HOST=redis-replica-service
+  - REDIS_REPLICA_PORT=6379
 
 images:
 - name: docker.io/falkordb/ldap-auth-rs

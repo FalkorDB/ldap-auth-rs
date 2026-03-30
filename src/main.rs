@@ -66,12 +66,22 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database with retry logic
     let redis_url = config.redis_url();
+    let redis_replica_url = config.redis_replica_url();
     info!(
-        "Connecting to Redis at {}:{} (with retry logic)...",
+        "Connecting to Redis primary at {}:{} (with retry logic)...",
         config.redis_host, config.redis_port
     );
-    let db = Arc::new(RedisDbService::new(&redis_url, None).await?) as Arc<dyn db::DbService>;
-    info!("Successfully connected to Redis");
+    if let Some(replica_host) = &config.redis_replica_host {
+        info!(
+            "Configured Redis replica at {}:{} for read-only fallback",
+            replica_host,
+            config.redis_replica_port.unwrap_or(config.redis_port)
+        );
+    }
+    let db = Arc::new(
+        RedisDbService::new_with_replica(&redis_url, redis_replica_url.as_deref(), None).await?,
+    ) as Arc<dyn db::DbService>;
+    info!("Redis connectivity initialized");
 
     // Start API server with optional TLS
     let api_db = db.clone();

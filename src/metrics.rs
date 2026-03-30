@@ -97,17 +97,6 @@ pub mod custom {
         .expect("Failed to register group_operations gauge")
     });
 
-    /// Legacy group operations counter (kept for backward compatibility)
-    #[allow(dead_code)]
-    pub static GROUP_OPERATIONS_LEGACY: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
-            "group_operations_total",
-            "Total number of group operations",
-            &["organization", "operation", "result"]
-        )
-        .expect("Failed to register legacy group_operations counter")
-    });
-
     /// Total number of organizations tracked by the service
     #[allow(dead_code)]
     pub static ORGANIZATIONS_COUNT: Lazy<IntGauge> = Lazy::new(|| {
