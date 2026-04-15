@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
     pub organization: String,
     pub username: String,
@@ -37,7 +37,7 @@ impl From<User> for UserResponse {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UserCreate {
     pub organization: String,
     pub username: String,
@@ -46,7 +46,7 @@ pub struct UserCreate {
     pub full_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct UserUpdate {
     pub password: Option<String>,
     pub email: Option<String>,
@@ -133,6 +133,42 @@ impl Group {
         } else {
             false
         }
+    }
+}
+
+impl std::fmt::Debug for User {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("User")
+            .field("organization", &self.organization)
+            .field("username", &self.username)
+            .field("password_hash", &"[REDACTED]")
+            .field("email", &self.email)
+            .field("full_name", &self.full_name)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for UserCreate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserCreate")
+            .field("organization", &self.organization)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("email", &self.email)
+            .field("full_name", &self.full_name)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for UserUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserUpdate")
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("email", &self.email)
+            .field("full_name", &self.full_name)
+            .finish()
     }
 }
 
