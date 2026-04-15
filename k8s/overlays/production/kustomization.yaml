@@ -29,7 +29,7 @@ configMapGenerator:
 
 images:
 - name: docker.io/falkordb/ldap-auth-rs
-  newTag: v0.1.3
+  newTag: v0.4.0
 
 replicas:
 - name: ldap-auth-rs

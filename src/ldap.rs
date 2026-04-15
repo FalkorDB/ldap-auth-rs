@@ -869,10 +869,6 @@ async fn handle_search_request(
     // Simple approach: search for group-related strings in the entire payload
     let payload_str = String::from_utf8_lossy(payload).to_string();
     let payload_str_lower = payload_str.to_lowercase();
-    debug!(
-        "Payload string (first 200 chars): {}",
-        &payload_str[..std::cmp::min(200, payload_str.len())]
-    );
 
     // Check if this is a group search (case-insensitive for LDAP keywords)
     let is_group_search = payload_str_lower.contains("groupofnames")

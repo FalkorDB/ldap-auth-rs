@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::env;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Config {
     pub redis_host: String,
     pub redis_port: u16,
@@ -161,6 +161,34 @@ impl Config {
             .map_err(|e| anyhow::anyhow!("Invalid LDAP_PORT {}: {}", self.ldap_port, e))?;
 
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("redis_host", &self.redis_host)
+            .field("redis_port", &self.redis_port)
+            .field("redis_username", &self.redis_username)
+            .field(
+                "redis_password",
+                &self.redis_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("redis_replica_host", &self.redis_replica_host)
+            .field("redis_replica_port", &self.redis_replica_port)
+            .field("redis_replica_username", &self.redis_replica_username)
+            .field(
+                "redis_replica_password",
+                &self.redis_replica_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("api_port", &self.api_port)
+            .field("ldap_port", &self.ldap_port)
+            .field("ldap_base_dn", &self.ldap_base_dn)
+            .field("ldap_search_bind_org", &self.ldap_search_bind_org)
+            .field("tls_cert_path", &self.tls_cert_path)
+            .field("tls_key_path", &self.tls_key_path)
+            .field("enable_tls", &self.enable_tls)
+            .finish()
     }
 }
 

@@ -68,8 +68,8 @@ async fn test_api_user_crud_with_metrics() {
         "Should contain the organization label"
     );
     assert!(
-        metrics_after.contains("operation=\"create\""),
-        "Should contain the create operation label"
+        metrics_after.contains("operation=\"total\""),
+        "Should contain the total operation label"
     );
 
     // 3. Verify count metric

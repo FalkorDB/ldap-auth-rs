@@ -75,26 +75,26 @@ pub mod custom {
         .expect("Failed to register redis_operation_duration histogram")
     });
 
-    /// User operations counter (create, update, delete)
+    /// User operations gauge (total from DB)
     #[allow(dead_code)]
-    pub static USER_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
+    pub static USER_OPERATIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
+        register_int_gauge_vec!(
             "ldap_user_operations_total",
             "Total number of user operations",
-            &["organization", "operation", "result"]
+            &["organization", "operation"]
         )
-        .expect("Failed to register user_operations counter")
+        .expect("Failed to register user_operations gauge")
     });
 
-    /// Group operations counter (create, update, delete, membership changes)
+    /// Group operations gauge (total from DB)
     #[allow(dead_code)]
-    pub static GROUP_OPERATIONS: Lazy<CounterVec> = Lazy::new(|| {
-        register_counter_vec!(
+    pub static GROUP_OPERATIONS: Lazy<IntGaugeVec> = Lazy::new(|| {
+        register_int_gauge_vec!(
             "ldap_group_operations_total",
             "Total number of group operations",
-            &["organization", "operation", "result"]
+            &["organization", "operation"]
         )
-        .expect("Failed to register group_operations counter")
+        .expect("Failed to register group_operations gauge")
     });
 
     /// Total number of organizations tracked by the service
@@ -146,22 +146,22 @@ pub fn record_ldap_bind(org: &str, success: bool) {
     custom::LDAP_BINDS.with_label_values(&[org, result]).inc();
 }
 
-/// Helper function to record user operations
+/// Helper function to record user operations (sets gauge value which is eventually synced)
 #[allow(dead_code)]
-pub fn record_user_operation(org: &str, operation: &str, success: bool) {
-    let result = if success { "success" } else { "failure" };
+pub fn record_user_operation(org: &str, operation: &str, count: i64) {
+    let safe = if count < 0 { 0 } else { count };
     custom::USER_OPERATIONS
-        .with_label_values(&[org, operation, result])
-        .inc();
+        .with_label_values(&[org, operation])
+        .set(safe);
 }
 
-/// Helper function to record group operations
+/// Helper function to record group operations (sets gauge value which is eventually synced)
 #[allow(dead_code)]
-pub fn record_group_operation(org: &str, operation: &str, success: bool) {
-    let result = if success { "success" } else { "failure" };
+pub fn record_group_operation(org: &str, operation: &str, count: i64) {
+    let safe = if count < 0 { 0 } else { count };
     custom::GROUP_OPERATIONS
-        .with_label_values(&[org, operation, result])
-        .inc();
+        .with_label_values(&[org, operation])
+        .set(safe);
 }
 
 /// Helper function to set organization count
