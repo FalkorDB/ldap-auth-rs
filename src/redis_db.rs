@@ -350,8 +350,7 @@ impl RedisDbService {
             let _ = metrics::custom::USERS_COUNT.remove_label_values(&[organization]);
             let _ = metrics::custom::GROUPS_COUNT.remove_label_values(&[organization]);
             let _ = metrics::custom::USER_OPERATIONS.remove_label_values(&[organization, "total"]);
-            let _ =
-                metrics::custom::GROUP_OPERATIONS.remove_label_values(&[organization, "total"]);
+            let _ = metrics::custom::GROUP_OPERATIONS.remove_label_values(&[organization, "total"]);
         }
 
         Self::sync_total_organizations_count(conn).await
