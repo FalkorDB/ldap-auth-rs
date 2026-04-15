@@ -55,9 +55,9 @@ RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main \
     curl \
     nghttp2-libs \
-    zlib=1.3.2-r0 \
-    libcrypto3=3.5.5-r1 \
-    libssl3=3.5.5-r1
+    zlib \
+    libcrypto3 \
+    libssl3
 
 # Copy binaries from builder
 COPY --from=final-builder /app/target/release/ldap-auth-rs /app/ldap-auth-rs
