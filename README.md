@@ -6,7 +6,7 @@ A production-ready, lightweight Rust-based LDAP authentication service with REST
 [![Spellcheck](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/spellcheck.yml/badge.svg)](https://github.com/FalkorDB/ldap-auth-rs/actions/workflows/spellcheck.yml)
 [![codecov](https://codecov.io/gh/FalkorDB/ldap-auth-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/FalkorDB/ldap-auth-rs)
 [![Tests](https://img.shields.io/badge/tests-47%20passing-brightgreen)](https://github.com/FalkorDB/ldap-auth-rs/actions)
-[![Production Ready](https://img.shields.io/badge/production-ready-blue)](docs/DEPLOYMENT.md)
+[![Production Ready](https://img.shields.io/badge/production-ready-blue)](docs/deployment.md)
 
 ## Features
 
@@ -84,7 +84,7 @@ docker run --rm -e LDAP_AUTH_TOKEN=your-token ldap-auth-rs:latest \
   ldap-auth-cli user list --org myorg
 ```
 
-See [CLI.md](CLI.md) for complete documentation and examples.
+See [docs/cli.md](docs/cli.md) for complete documentation and examples.
 
 ## API Endpoints
 
@@ -131,7 +131,7 @@ Supports standard LDAP operations:
 - ✅ **Input Validation** and sanitization
 - 🚫 **No Panics** in production code paths
 
-See [docs/SECURITY.md](docs/SECURITY.md) for detailed security documentation.
+See [docs/security-features.md](docs/security-features.md) for detailed security documentation.
 
 ## Production Features
 
@@ -143,7 +143,7 @@ Full Prometheus metrics integration:
 - User/Group operation counters
 - Redis operation latency
 
-See [Metrics Guide](docs/METRICS.md) for details.
+See [Metrics Guide](docs/metrics.md) for details.
 
 ### Performance Optimizations
 - **Bearer token caching** for reduced validation overhead
@@ -187,7 +187,7 @@ TLS_CERT_PATH=/path/to/cert.pem
 TLS_KEY_PATH=/path/to/key.pem
 ```
 
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for all options.
+See [docs/configuration.md](docs/configuration.md) for all options.
 
 ## Development
 
@@ -238,10 +238,10 @@ ldap-auth-rs/
 
 ## Documentation
 
-- [API Examples](docs/API_EXAMPLES.md) - Complete API usage guide
-- [Architecture](docs/ARCHITECTURE.md) - System design and components
-- [Security](docs/SECURITY.md) - Security features and best practices
-- [Metrics](docs/METRICS.md) - Prometheus metrics guide
+- [API Examples](docs/api-examples.md) - Complete API usage guide
+- [Architecture](docs/architecture.md) - System design and components
+- [Security](docs/security-features.md) - Security features and best practices
+- [Metrics](docs/metrics.md) - Prometheus metrics guide
 - [Production Hardening](PRODUCTION_HARDENING.md) - Production readiness details
 - [Contributing](CONTRIBUTING.md) - Development guidelines
 
@@ -271,7 +271,7 @@ cargo test --test metrics_test
 cargo tarpaulin --out Html
 ```
 
-See [docs/LDAP_COMPLIANCE_TESTING.md](docs/LDAP_COMPLIANCE_TESTING.md) for detailed information about LDAP compliance testing.
+See [docs/ldap-compliance.md](docs/ldap-compliance.md) for detailed information about LDAP compliance testing.
 
 ## Deployment
 
@@ -294,7 +294,7 @@ docker run -d \
 
 ### Kubernetes
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for Kubernetes manifests and Helm charts.
+See [docs/deployment.md](docs/deployment.md) for Kubernetes manifests and Helm charts.
 
 ### Monitoring
 
@@ -308,7 +308,7 @@ scrape_configs:
     metrics_path: '/metrics'
 ```
 
-See [Metrics Guide](docs/METRICS.md) for Grafana dashboard queries.
+See [Metrics Guide](docs/metrics.md) for Grafana dashboard queries.
 
 ## Performance
 
