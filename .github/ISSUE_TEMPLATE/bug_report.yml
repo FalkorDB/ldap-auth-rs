@@ -1,0 +1,96 @@
+name: Bug Report
+description: Report something that is not working as expected
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please describe the use case you were
+        trying to accomplish so we can reproduce the problem in the right context.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: >-
+        What were you trying to achieve? Describe the real-world scenario (who the users are,
+        what system is integrating with the service, and what outcome you expected).
+      placeholder: |
+        As a platform operator, I authenticate FalkorDB users against an existing OpenLDAP
+        directory so that team members can reuse their corporate credentials.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current behavior
+      description: What actually happens? Include error messages and relevant log output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps. Include requests, CLI commands, or LDAP queries used.
+      placeholder: |
+        1. Start the service with `...`
+        2. Run `ldapsearch -x -H ldap://localhost:3893 ...`
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag, container image tag, or commit SHA.
+      placeholder: "v0.3.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Local binary (cargo run)
+        - Docker / docker-compose
+        - Kubernetes
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, LDAP client, Redis version, and any relevant configuration (redact secrets).
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Please redact credentials, DNs, and tokens.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I removed secrets and personal data from the details above
+          required: true
