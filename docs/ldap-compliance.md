@@ -198,7 +198,7 @@ This test suite validates compliance with:
 
 ## Known Limitations
 
-See the main [ARCHITECTURE.md](../docs/ARCHITECTURE.md) for detailed information about LDAP implementation limitations. Key limitations tested:
+See the main [architecture.md](architecture.md) for detailed information about LDAP implementation limitations. Key limitations tested:
 
 ✅ **Tested & Working:**
 - Simple bind authentication

@@ -191,8 +191,8 @@ Update documentation when:
 
 Documentation locations:
 - `README.md`: Overview and quick start
-- `docs/ARCHITECTURE.md`: System architecture
-- `docs/API_EXAMPLES.md`: API usage examples
+- `docs/architecture.md`: System architecture
+- `docs/api-examples.md`: API usage examples
 - Code comments: Implementation details
 - `cargo doc`: API documentation
 
