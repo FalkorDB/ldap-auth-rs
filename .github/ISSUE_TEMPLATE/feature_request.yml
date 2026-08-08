@@ -1,0 +1,72 @@
+name: Feature Request
+description: Propose a new capability or an improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature requests are prioritized by the use case behind them. Please describe the problem
+        you need to solve before describing the solution you have in mind.
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: >-
+        Describe the concrete scenario that motivates this request: who needs it, what they are
+        trying to accomplish, and why the current behavior is insufficient.
+      placeholder: |
+        As a <role>, I want to <goal> so that <outcome>.
+
+        Today I have to <workaround>, which is a problem because <impact>.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should the service do? Include API shape, config options, or CLI flags if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you evaluated, and why they do not work well enough.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - LDAP protocol / server
+        - REST API
+        - Authentication & authorization
+        - CLI
+        - Storage (Redis / persistence)
+        - Configuration
+        - Metrics & observability
+        - Deployment (Docker / Kubernetes)
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: How many users or deployments does this affect, and how blocking is it?
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I am willing to help implement or test this change
+          required: false

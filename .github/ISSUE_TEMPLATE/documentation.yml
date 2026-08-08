@@ -1,0 +1,37 @@
+name: Documentation
+description: Report missing, unclear, or incorrect documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: >-
+        What were you trying to do when the documentation fell short? Describe the task you were
+        working on so we can document the right scenario.
+      placeholder: |
+        I was deploying the service to Kubernetes with TLS termination and could not determine
+        which certificate fields the service expects.
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: Affected page
+      description: Path or URL of the document, e.g. `docs/deployment.md`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
