@@ -20,6 +20,13 @@
 | `REDIS_REPLICA_PORT` | primary port | Optional replica port |
 | `REDIS_REPLICA_USERNAME` | primary username | Optional replica username override |
 | `REDIS_REPLICA_PASSWORD` | primary password | Optional replica password override |
+| `REDIS_RESPONSE_TIMEOUT_MS` | `2000` | How long to wait for a Redis reply before failing the command |
+
+### Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PASSWORD_VERIFY_CACHE_TTL_SECS` | `60` | Reuse a successful password verification for this long, so clients that re-bind with the same credentials (e.g. a service account bound before every lookup) skip the Argon2 check. Keyed on user, a per-process keyed hash of the password, and the stored password hash, so a password change or user deletion takes effect immediately. Failed attempts are never cached. `0` disables; maximum `86400` |
 
 ### Optional Configuration
 

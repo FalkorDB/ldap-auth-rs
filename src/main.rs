@@ -79,7 +79,13 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let db = Arc::new(
-        RedisDbService::new_with_replica(&redis_url, redis_replica_url.as_deref(), None).await?,
+        RedisDbService::new_with_options(
+            &redis_url,
+            redis_replica_url.as_deref(),
+            None,
+            config.redis_options(),
+        )
+        .await?,
     ) as Arc<dyn db::DbService>;
     info!("Redis connectivity initialized");
 
