@@ -3,6 +3,7 @@
 use ldap_auth_rs::{
     db::DbService,
     error::AppError,
+    metrics::custom::PASSWORD_VERIFY_CACHE,
     models::{UserCreate, UserUpdate},
     redis_db::{RedisDbService, RedisOptions},
 };
@@ -22,6 +23,16 @@ async fn setup_cached_db() -> RedisDbService {
         .expect("Failed to connect to Redis")
 }
 
+/// (hits, misses) recorded for an organization so far.
+fn cache_counts(org: &str) -> (f64, f64) {
+    (
+        PASSWORD_VERIFY_CACHE.with_label_values(&[org, "hit"]).get(),
+        PASSWORD_VERIFY_CACHE
+            .with_label_values(&[org, "miss"])
+            .get(),
+    )
+}
+
 /// Random secret per test, so no credential is hard-coded.
 fn secret() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -30,7 +41,9 @@ fn secret() -> String {
 #[tokio::test]
 async fn test_cached_bind_revoked_by_password_change_and_deletion() {
     let db = setup_cached_db().await;
-    let org = "verify-cache-org";
+    // Unique org so the process-global metric counters start at zero.
+    let org_name = format!("verify-cache-org-{}", uuid::Uuid::new_v4());
+    let org = org_name.as_str();
     let username = format!("user-{}", uuid::Uuid::new_v4());
     let (old_password, new_password) = (secret(), secret());
 
@@ -44,17 +57,19 @@ async fn test_cached_bind_revoked_by_password_change_and_deletion() {
     .await
     .expect("create user");
 
-    // Bind twice so the second one is served from the cache.
+    // First bind runs Argon2; the second is served from the cache.
     assert!(
         db.verify_user_password(org, &username, &old_password)
             .await
             .unwrap()
     );
+    assert_eq!(cache_counts(org), (0.0, 1.0));
     assert!(
         db.verify_user_password(org, &username, &old_password)
             .await
             .unwrap()
     );
+    assert_eq!(cache_counts(org), (1.0, 1.0));
 
     // Change the password: the cached old password must stop working.
     db.update_user(
@@ -79,12 +94,15 @@ async fn test_cached_bind_revoked_by_password_change_and_deletion() {
             .await
             .unwrap()
     );
+    // Both went through Argon2: the stale cache entry was not used.
+    assert_eq!(cache_counts(org), (1.0, 3.0));
     // Cached now.
     assert!(
         db.verify_user_password(org, &username, &new_password)
             .await
             .unwrap()
     );
+    assert_eq!(cache_counts(org), (2.0, 3.0));
 
     // Delete the user: the cached new password must stop working.
     db.delete_user(org, &username).await.expect("delete user");

@@ -828,8 +828,10 @@ impl DbService for RedisDbService {
             .verify_cache
             .is_verified(organization, username, password, &user.password_hash)
         {
+            metrics::record_password_verify_cache(organization, true);
             return Ok(true);
         }
+        metrics::record_password_verify_cache(organization, false);
 
         let result =
             verify_password_blocking(password.to_string(), user.password_hash.clone()).await?;
