@@ -567,6 +567,10 @@ impl DbService for RedisDbService {
             "Creating user: organization={}, username={}",
             user.organization, user.username
         );
+        // Hash before taking a pooled connection so slow Argon2 work never
+        // holds one that LDAP reads may be waiting for.
+        let password_hash = hash_password_blocking(user.password).await?;
+
         let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(&user.organization, &user.username);
 
@@ -578,9 +582,6 @@ impl DbService for RedisDbService {
                 user.organization, user.username
             )));
         }
-
-        // Hash the password
-        let password_hash = hash_password_blocking(user.password).await?;
 
         // Create user object
         let mut new_user = User::new(
@@ -637,6 +638,12 @@ impl DbService for RedisDbService {
             username,
             update.password.is_some()
         );
+        // Hash before taking a pooled connection (see create_user).
+        let new_password_hash = match update.password {
+            Some(password) => Some(hash_password_blocking(password).await?),
+            None => None,
+        };
+
         let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(organization, username);
 
@@ -644,8 +651,8 @@ impl DbService for RedisDbService {
         let mut user = Self::get_user_with_conn(&mut conn, organization, username).await?;
 
         // Update fields
-        if let Some(password) = update.password {
-            user.password_hash = hash_password_blocking(password).await?;
+        if let Some(password_hash) = new_password_hash {
+            user.password_hash = password_hash;
         }
         if let Some(email) = update.email {
             user.email = Some(email);

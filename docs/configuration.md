@@ -26,7 +26,7 @@
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PASSWORD_VERIFY_CACHE_TTL_SECS` | `60` | Reuse a successful password verification for this long, so clients that re-bind with the same credentials (e.g. a service account bound before every lookup) skip the Argon2 check. Keyed on user, a per-process keyed hash of the password, and the stored password hash, so a password change or user deletion takes effect immediately. Failed attempts are never cached. `0` disables |
+| `PASSWORD_VERIFY_CACHE_TTL_SECS` | `60` | Reuse a successful password verification for this long, so clients that re-bind with the same credentials (e.g. a service account bound before every lookup) skip the Argon2 check. Keyed on user, a per-process keyed hash of the password, and the stored password hash, so a password change or user deletion takes effect immediately. Failed attempts are never cached. `0` disables; maximum `86400` |
 
 ### Optional Configuration
 

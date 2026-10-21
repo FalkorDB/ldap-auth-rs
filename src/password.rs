@@ -7,12 +7,36 @@ use argon2::{
     },
 };
 use blake2::{Blake2bMac512, digest::Mac};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 
 /// Upper bound on cached verifications, so memory stays bounded under churn.
 const VERIFY_CACHE_MAX_ENTRIES: usize = 10_000;
+
+/// Limits concurrent Argon2 operations to the CPU budget. Each one uses ~19 MiB
+/// and a full core, so an unbounded burst of binds would exhaust memory and
+/// starve the threads that read Redis replies.
+static HASHING_PERMITS: Lazy<Semaphore> = Lazy::new(|| {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    Semaphore::new(cpus)
+});
+
+async fn run_hashing<T, F>(task: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let _permit = HASHING_PERMITS
+        .acquire()
+        .await
+        .map_err(|e| AppError::Internal(format!("Password hashing unavailable: {}", e)))?;
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|e| AppError::Internal(format!("Password hashing task failed: {}", e)))?
+}
 
 /// Hash a password using Argon2
 pub fn hash_password(password: &str) -> Result<String> {
@@ -42,16 +66,12 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 /// stalls every other task on that thread, including the tasks that read Redis
 /// replies, which then hit the Redis response timeout.
 pub async fn hash_password_blocking(password: String) -> Result<String> {
-    tokio::task::spawn_blocking(move || hash_password(&password))
-        .await
-        .map_err(|e| AppError::Internal(format!("Password hashing task failed: {}", e)))?
+    run_hashing(move || hash_password(&password)).await
 }
 
 /// Verify a password on the blocking thread pool. See [`hash_password_blocking`].
 pub async fn verify_password_blocking(password: String, hash: String) -> Result<bool> {
-    tokio::task::spawn_blocking(move || verify_password(&password, &hash))
-        .await
-        .map_err(|e| AppError::Internal(format!("Password verification task failed: {}", e)))?
+    run_hashing(move || verify_password(&password, &hash)).await
 }
 
 struct VerifyCacheEntry {
@@ -134,20 +154,31 @@ impl VerifyCache {
         if self.ttl.is_zero() {
             return;
         }
+        let Some(expires_at) = Instant::now().checked_add(self.ttl) else {
+            return;
+        };
+        let key = (organization.to_string(), username.to_string());
         let entry = VerifyCacheEntry {
             stored_hash: stored_hash.to_string(),
             password_mac: self.password_mac(password),
-            expires_at: Instant::now() + self.ttl,
+            expires_at,
         };
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        if entries.len() >= VERIFY_CACHE_MAX_ENTRIES {
+        if entries.len() >= VERIFY_CACHE_MAX_ENTRIES && !entries.contains_key(&key) {
             let now = Instant::now();
             entries.retain(|_, e| e.expires_at > now);
             if entries.len() >= VERIFY_CACHE_MAX_ENTRIES {
-                entries.clear();
+                // Still full of live entries: evict the one closest to expiry.
+                if let Some(victim) = entries
+                    .iter()
+                    .min_by_key(|(_, e)| e.expires_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    entries.remove(&victim);
+                }
             }
         }
-        entries.insert((organization.to_string(), username.to_string()), entry);
+        entries.insert(key, entry);
     }
 
     /// Drop any cached verification for a user.
@@ -184,54 +215,79 @@ mod tests {
         assert!(verify_password(password, &hash2).unwrap());
     }
 
+    /// Random per-test secret, so no credential is hard-coded in the tests.
+    fn secret() -> String {
+        let mut bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut bytes);
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
     #[tokio::test]
     async fn test_blocking_variants() {
-        let hash = hash_password_blocking("pw".to_string()).await.unwrap();
-        assert!(
-            verify_password_blocking("pw".to_string(), hash.clone())
-                .await
-                .unwrap()
-        );
-        assert!(
-            !verify_password_blocking("nope".to_string(), hash)
-                .await
-                .unwrap()
-        );
+        let (pw, wrong) = (secret(), secret());
+        let hash = hash_password_blocking(pw.clone()).await.unwrap();
+        assert!(verify_password_blocking(pw, hash.clone()).await.unwrap());
+        assert!(!verify_password_blocking(wrong, hash).await.unwrap());
     }
 
     #[test]
     fn test_verify_cache_hit_and_miss() {
         let cache = VerifyCache::new(Duration::from_secs(60));
-        assert!(!cache.is_verified("org", "user", "pw", "hash1"));
+        let (pw, other_pw, hash1, hash2) = (secret(), secret(), secret(), secret());
+        assert!(!cache.is_verified("org", "user", &pw, &hash1));
 
-        cache.record_success("org", "user", "pw", "hash1");
-        assert!(cache.is_verified("org", "user", "pw", "hash1"));
+        cache.record_success("org", "user", &pw, &hash1);
+        assert!(cache.is_verified("org", "user", &pw, &hash1));
 
         // Wrong password, other user, or changed stored hash must miss.
-        assert!(!cache.is_verified("org", "user", "other", "hash1"));
-        assert!(!cache.is_verified("org", "other", "pw", "hash1"));
-        assert!(!cache.is_verified("org", "user", "pw", "hash2"));
+        assert!(!cache.is_verified("org", "user", &other_pw, &hash1));
+        assert!(!cache.is_verified("org", "other", &pw, &hash1));
+        assert!(!cache.is_verified("org", "user", &pw, &hash2));
         // A stored-hash mismatch evicts the entry.
-        assert!(!cache.is_verified("org", "user", "pw", "hash1"));
+        assert!(!cache.is_verified("org", "user", &pw, &hash1));
     }
 
     #[test]
     fn test_verify_cache_invalidate() {
         let cache = VerifyCache::new(Duration::from_secs(60));
-        cache.record_success("org", "user", "pw", "hash1");
+        let (pw, hash) = (secret(), secret());
+        cache.record_success("org", "user", &pw, &hash);
         cache.invalidate("org", "user");
-        assert!(!cache.is_verified("org", "user", "pw", "hash1"));
+        assert!(!cache.is_verified("org", "user", &pw, &hash));
     }
 
     #[test]
     fn test_verify_cache_expiry_and_disabled() {
+        let (pw, hash) = (secret(), secret());
         let cache = VerifyCache::new(Duration::from_millis(1));
-        cache.record_success("org", "user", "pw", "hash1");
+        cache.record_success("org", "user", &pw, &hash);
         std::thread::sleep(Duration::from_millis(5));
-        assert!(!cache.is_verified("org", "user", "pw", "hash1"));
+        assert!(!cache.is_verified("org", "user", &pw, &hash));
 
         let disabled = VerifyCache::new(Duration::ZERO);
-        disabled.record_success("org", "user", "pw", "hash1");
-        assert!(!disabled.is_verified("org", "user", "pw", "hash1"));
+        disabled.record_success("org", "user", &pw, &hash);
+        assert!(!disabled.is_verified("org", "user", &pw, &hash));
+    }
+
+    #[test]
+    fn test_verify_cache_huge_ttl_does_not_panic() {
+        let (pw, hash) = (secret(), secret());
+        let cache = VerifyCache::new(Duration::MAX);
+        cache.record_success("org", "user", &pw, &hash);
+        assert!(!cache.is_verified("org", "user", &pw, &hash));
+    }
+
+    #[test]
+    fn test_verify_cache_full_evicts_single_entry() {
+        let cache = VerifyCache::new(Duration::from_secs(60));
+        let (pw, hash) = (secret(), secret());
+        for i in 0..VERIFY_CACHE_MAX_ENTRIES {
+            cache.record_success("org", &format!("user{}", i), &pw, &hash);
+        }
+        cache.record_success("org", "newcomer", &pw, &hash);
+        let len = cache.entries.lock().unwrap().len();
+        assert_eq!(len, VERIFY_CACHE_MAX_ENTRIES);
+        assert!(cache.is_verified("org", "newcomer", &pw, &hash));
+        assert!(cache.is_verified("org", "user9999", &pw, &hash));
     }
 }

@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use std::env;
 
+/// One day; longer would keep stale credentials alive well past any sane window.
+const MAX_PASSWORD_VERIFY_CACHE_TTL_SECS: u64 = 86_400;
+
 #[derive(Clone, Deserialize)]
 pub struct Config {
     pub redis_host: String,
@@ -143,6 +146,13 @@ impl Config {
             anyhow::bail!("REDIS_RESPONSE_TIMEOUT_MS cannot be 0");
         }
 
+        if self.password_verify_cache_ttl_secs > MAX_PASSWORD_VERIFY_CACHE_TTL_SECS {
+            anyhow::bail!(
+                "PASSWORD_VERIFY_CACHE_TTL_SECS cannot exceed {}",
+                MAX_PASSWORD_VERIFY_CACHE_TTL_SECS
+            );
+        }
+
         // Validate API port
         if self.api_port == 0 {
             anyhow::bail!("API_PORT cannot be 0");
@@ -242,6 +252,16 @@ mod tests {
             tls_key_path: None,
             enable_tls: false,
         }
+    }
+
+    #[test]
+    fn test_validate_rejects_excessive_verify_cache_ttl() {
+        let mut config = base_config();
+        config.password_verify_cache_ttl_secs = u64::MAX;
+        assert!(config.validate().is_err());
+
+        config.password_verify_cache_ttl_secs = 86_400;
+        assert!(config.validate().is_ok());
     }
 
     #[test]
