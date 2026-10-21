@@ -36,6 +36,7 @@ ldap3 = "0.12.1"
 
 # Password hashing
 argon2 = { version = "0.5", features = ["std"] }
+blake2 = "0.10"
 rand = "0.10.0"
 
 # Error handling

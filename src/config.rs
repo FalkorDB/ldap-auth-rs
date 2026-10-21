@@ -11,6 +11,8 @@ pub struct Config {
     pub redis_replica_port: Option<u16>,
     pub redis_replica_username: Option<String>,
     pub redis_replica_password: Option<String>,
+    pub redis_response_timeout_ms: u64,
+    pub password_verify_cache_ttl_secs: u64,
     pub api_port: u16,
     pub ldap_port: u16,
     pub ldap_base_dn: String,
@@ -41,6 +43,14 @@ impl Config {
                 .and_then(|s| s.parse().ok()),
             redis_replica_username: env::var("REDIS_REPLICA_USERNAME").ok(),
             redis_replica_password: env::var("REDIS_REPLICA_PASSWORD").ok(),
+            redis_response_timeout_ms: env::var("REDIS_RESPONSE_TIMEOUT_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2000),
+            password_verify_cache_ttl_secs: env::var("PASSWORD_VERIFY_CACHE_TTL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60),
             api_port: env::var("API_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -64,6 +74,13 @@ impl Config {
 
     pub fn ldap_address(&self) -> String {
         format!("0.0.0.0:{}", self.ldap_port)
+    }
+
+    pub fn redis_options(&self) -> crate::redis_db::RedisOptions {
+        crate::redis_db::RedisOptions {
+            response_timeout: std::time::Duration::from_millis(self.redis_response_timeout_ms),
+            verify_cache_ttl: std::time::Duration::from_secs(self.password_verify_cache_ttl_secs),
+        }
     }
 
     pub fn redis_url(&self) -> String {
@@ -120,6 +137,10 @@ impl Config {
 
         if self.redis_replica_host.is_some() && self.redis_replica_port == Some(0) {
             anyhow::bail!("REDIS_REPLICA_PORT cannot be 0");
+        }
+
+        if self.redis_response_timeout_ms == 0 {
+            anyhow::bail!("REDIS_RESPONSE_TIMEOUT_MS cannot be 0");
         }
 
         // Validate API port
@@ -181,6 +202,11 @@ impl std::fmt::Debug for Config {
                 "redis_replica_password",
                 &self.redis_replica_password.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("redis_response_timeout_ms", &self.redis_response_timeout_ms)
+            .field(
+                "password_verify_cache_ttl_secs",
+                &self.password_verify_cache_ttl_secs,
+            )
             .field("api_port", &self.api_port)
             .field("ldap_port", &self.ldap_port)
             .field("ldap_base_dn", &self.ldap_base_dn)
@@ -206,6 +232,8 @@ mod tests {
             redis_replica_port: None,
             redis_replica_username: None,
             redis_replica_password: None,
+            redis_response_timeout_ms: 2000,
+            password_verify_cache_ttl_secs: 60,
             api_port: 8080,
             ldap_port: 3389,
             ldap_base_dn: "dc=example,dc=com".to_string(),

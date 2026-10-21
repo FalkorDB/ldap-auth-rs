@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use deadpool_redis::{Config as PoolConfig, Pool, Runtime, redis::AsyncCommands};
+use deadpool_redis::{Config as PoolConfig, Hook, Pool, Runtime, redis::AsyncCommands};
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 use std::future::Future;
@@ -12,18 +12,40 @@ use crate::db::{DbConnectionHealth, DbService};
 use crate::error::{AppError, Result};
 use crate::metrics;
 use crate::models::{Group, GroupCreate, GroupUpdate, User, UserCreate, UserUpdate};
-use crate::password::{hash_password, verify_password};
+use crate::password::{VerifyCache, hash_password_blocking, verify_password_blocking};
 
 /// Redis-based implementation of the DbService trait
 pub struct RedisDbService {
     primary_pool: Pool,
     replica_pool: Option<Pool>,
+    verify_cache: VerifyCache,
+}
+
+/// Tunables for [`RedisDbService`].
+#[derive(Debug, Clone, Copy)]
+pub struct RedisOptions {
+    /// How long to wait for a Redis reply before failing the command.
+    pub response_timeout: tokio::time::Duration,
+    /// How long a successful password verification is reused. Zero disables it.
+    pub verify_cache_ttl: tokio::time::Duration,
+}
+
+impl Default for RedisOptions {
+    fn default() -> Self {
+        Self {
+            response_timeout: DEFAULT_RESPONSE_TIMEOUT,
+            verify_cache_ttl: DEFAULT_VERIFY_CACHE_TTL,
+        }
+    }
 }
 
 static RECONCILED_ORGS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 const METRICS_RECONCILE_INTERVAL_SECS: u64 = 60;
 const HEALTH_CHECK_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_millis(1500);
+/// The redis crate defaults to 500ms, which is too tight under CPU pressure.
+pub const DEFAULT_RESPONSE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(2);
+pub const DEFAULT_VERIFY_CACHE_TTL: tokio::time::Duration = tokio::time::Duration::from_secs(60);
 
 type RedisConnection = deadpool_redis::Connection;
 type RedisReadFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -41,12 +63,23 @@ impl RedisDbService {
         replica_url: Option<&str>,
         retry: Option<u32>,
     ) -> Result<Self> {
+        Self::new_with_options(redis_url, replica_url, retry, RedisOptions::default()).await
+    }
+
+    /// Create a new RedisDbService with an optional replica and explicit tunables.
+    pub async fn new_with_options(
+        redis_url: &str,
+        replica_url: Option<&str>,
+        retry: Option<u32>,
+        options: RedisOptions,
+    ) -> Result<Self> {
         let retry = retry.unwrap_or(10);
-        Self::new_with_replica_and_retry(
+        Self::connect(
             redis_url,
             replica_url,
             retry,
             tokio::time::Duration::from_secs(2),
+            options,
         )
         .await
     }
@@ -68,9 +101,26 @@ impl RedisDbService {
         max_retries: u32,
         initial_delay: tokio::time::Duration,
     ) -> Result<Self> {
-        let primary_pool = Self::create_pool(redis_url)?;
+        Self::connect(
+            redis_url,
+            replica_url,
+            max_retries,
+            initial_delay,
+            RedisOptions::default(),
+        )
+        .await
+    }
+
+    async fn connect(
+        redis_url: &str,
+        replica_url: Option<&str>,
+        max_retries: u32,
+        initial_delay: tokio::time::Duration,
+        options: RedisOptions,
+    ) -> Result<Self> {
+        let primary_pool = Self::create_pool(redis_url, options.response_timeout)?;
         let replica_pool = match replica_url {
-            Some(url) => Some(Self::create_pool(url)?),
+            Some(url) => Some(Self::create_pool(url, options.response_timeout)?),
             None => None,
         };
 
@@ -113,6 +163,7 @@ impl RedisDbService {
                 let service = Self {
                     primary_pool,
                     replica_pool,
+                    verify_cache: VerifyCache::new(options.verify_cache_ttl),
                 };
                 service.start_metrics_reconciler();
                 return Ok(service);
@@ -155,9 +206,16 @@ impl RedisDbService {
         }
     }
 
-    fn create_pool(redis_url: &str) -> Result<Pool> {
+    fn create_pool(redis_url: &str, response_timeout: tokio::time::Duration) -> Result<Pool> {
         let cfg = PoolConfig::from_url(redis_url);
-        cfg.create_pool(Some(Runtime::Tokio1))
+        cfg.builder()
+            .map_err(|err| AppError::Database(format!("Failed to create Redis pool: {}", err)))?
+            .runtime(Runtime::Tokio1)
+            .post_create(Hook::sync_fn(move |conn, _| {
+                conn.set_response_timeout(response_timeout);
+                Ok(())
+            }))
+            .build()
             .map_err(|err| AppError::Database(format!("Failed to create Redis pool: {}", err)))
     }
 
@@ -522,7 +580,7 @@ impl DbService for RedisDbService {
         }
 
         // Hash the password
-        let password_hash = hash_password(&user.password)?;
+        let password_hash = hash_password_blocking(user.password).await?;
 
         // Create user object
         let mut new_user = User::new(
@@ -587,7 +645,7 @@ impl DbService for RedisDbService {
 
         // Update fields
         if let Some(password) = update.password {
-            user.password_hash = hash_password(&password)?;
+            user.password_hash = hash_password_blocking(password).await?;
         }
         if let Some(email) = update.email {
             user.email = Some(email);
@@ -613,6 +671,7 @@ impl DbService for RedisDbService {
             "Deleting user: organization={}, username={}",
             organization, username
         );
+        self.verify_cache.invalidate(organization, username);
         let mut conn = self.get_primary_conn().await?;
         let key = Self::user_key(organization, username);
 
@@ -729,7 +788,20 @@ impl DbService for RedisDbService {
                 )
             })
             .await?;
-        let result = verify_password(password, &user.password_hash)?;
+
+        if self
+            .verify_cache
+            .is_verified(organization, username, password, &user.password_hash)
+        {
+            return Ok(true);
+        }
+
+        let result =
+            verify_password_blocking(password.to_string(), user.password_hash.clone()).await?;
+        if result {
+            self.verify_cache
+                .record_success(organization, username, password, &user.password_hash);
+        }
         Ok(result)
     }
 
