@@ -29,13 +29,26 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    let _permit = HASHING_PERMITS
+    run_hashing_with(&HASHING_PERMITS, task).await
+}
+
+async fn run_hashing_with<T, F>(permits: &'static Semaphore, task: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let permit = permits
         .acquire()
         .await
         .map_err(|e| AppError::Internal(format!("Password hashing unavailable: {}", e)))?;
-    tokio::task::spawn_blocking(task)
-        .await
-        .map_err(|e| AppError::Internal(format!("Password hashing task failed: {}", e)))?
+    // The permit moves into the blocking task so it stays held until Argon2
+    // finishes, even if the caller is cancelled (e.g. by a request timeout).
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        task()
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("Password hashing task failed: {}", e)))?
 }
 
 /// Hash a password using Argon2
@@ -228,6 +241,33 @@ mod tests {
         let hash = hash_password_blocking(pw.clone()).await.unwrap();
         assert!(verify_password_blocking(pw, hash.clone()).await.unwrap());
         assert!(!verify_password_blocking(wrong, hash).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_permit_held_until_blocking_work_finishes() {
+        let permits: &'static Semaphore = Box::leak(Box::new(Semaphore::new(1)));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let caller = tokio::spawn(run_hashing_with(permits, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        }));
+        tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
+            .await
+            .unwrap();
+
+        // Cancel the caller while the blocking work is still running.
+        caller.abort();
+        let _ = caller.await;
+        assert_eq!(permits.available_permits(), 0);
+
+        release_tx.send(()).unwrap();
+        let _permit = tokio::time::timeout(Duration::from_secs(5), permits.acquire())
+            .await
+            .expect("permit released once blocking work finishes")
+            .unwrap();
     }
 
     #[test]
