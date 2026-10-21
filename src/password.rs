@@ -24,15 +24,19 @@ static HASHING_PERMITS: Lazy<Semaphore> = Lazy::new(|| {
     Semaphore::new(cpus)
 });
 
-async fn run_hashing<T, F>(task: F) -> Result<T>
+async fn run_hashing<T, F>(operation: &'static str, task: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    run_hashing_with(&HASHING_PERMITS, task).await
+    run_hashing_with(&HASHING_PERMITS, operation, task).await
 }
 
-async fn run_hashing_with<T, F>(permits: &'static Semaphore, task: F) -> Result<T>
+async fn run_hashing_with<T, F>(
+    permits: &'static Semaphore,
+    operation: &'static str,
+    task: F,
+) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -40,7 +44,7 @@ where
     let permit = permits
         .acquire()
         .await
-        .map_err(|e| AppError::Internal(format!("Password hashing unavailable: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("{} unavailable: {}", operation, e)))?;
     // The permit moves into the blocking task so it stays held until Argon2
     // finishes, even if the caller is cancelled (e.g. by a request timeout).
     tokio::task::spawn_blocking(move || {
@@ -48,7 +52,7 @@ where
         task()
     })
     .await
-    .map_err(|e| AppError::Internal(format!("Password hashing task failed: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("{} task failed: {}", operation, e)))?
 }
 
 /// Hash a password using Argon2
@@ -79,12 +83,15 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 /// stalls every other task on that thread, including the tasks that read Redis
 /// replies, which then hit the Redis response timeout.
 pub async fn hash_password_blocking(password: String) -> Result<String> {
-    run_hashing(move || hash_password(&password)).await
+    run_hashing("Password hashing", move || hash_password(&password)).await
 }
 
 /// Verify a password on the blocking thread pool. See [`hash_password_blocking`].
 pub async fn verify_password_blocking(password: String, hash: String) -> Result<bool> {
-    run_hashing(move || verify_password(&password, &hash)).await
+    run_hashing("Password verification", move || {
+        verify_password(&password, &hash)
+    })
+    .await
 }
 
 struct VerifyCacheEntry {
@@ -249,7 +256,7 @@ mod tests {
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
 
-        let caller = tokio::spawn(run_hashing_with(permits, move || {
+        let caller = tokio::spawn(run_hashing_with(permits, "test", move || {
             started_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             Ok(())

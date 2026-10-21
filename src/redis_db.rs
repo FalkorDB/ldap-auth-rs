@@ -567,14 +567,27 @@ impl DbService for RedisDbService {
             "Creating user: organization={}, username={}",
             user.organization, user.username
         );
-        // Hash before taking a pooled connection so slow Argon2 work never
+        // Reject duplicates before spending Argon2 work on them.
+        let key = Self::user_key(&user.organization, &user.username);
+        if self
+            .get_primary_conn()
+            .await?
+            .exists::<_, bool>(&key)
+            .await?
+        {
+            return Err(AppError::AlreadyExists(format!(
+                "User {}/{} already exists",
+                user.organization, user.username
+            )));
+        }
+
+        // Hash without holding a pooled connection so slow Argon2 work never
         // holds one that LDAP reads may be waiting for.
         let password_hash = hash_password_blocking(user.password).await?;
 
         let mut conn = self.get_primary_conn().await?;
-        let key = Self::user_key(&user.organization, &user.username);
 
-        // Check if user already exists
+        // Re-check: the user may have been created while we were hashing.
         let exists: bool = conn.exists(&key).await?;
         if exists {
             return Err(AppError::AlreadyExists(format!(
@@ -638,14 +651,29 @@ impl DbService for RedisDbService {
             username,
             update.password.is_some()
         );
-        // Hash before taking a pooled connection (see create_user).
+        let key = Self::user_key(organization, username);
+
+        // Hash without holding a pooled connection (see create_user), but
+        // reject unknown users before spending Argon2 work on them.
         let new_password_hash = match update.password {
-            Some(password) => Some(hash_password_blocking(password).await?),
+            Some(password) => {
+                if !self
+                    .get_primary_conn()
+                    .await?
+                    .exists::<_, bool>(&key)
+                    .await?
+                {
+                    return Err(AppError::NotFound(format!(
+                        "User {}/{} not found",
+                        organization, username
+                    )));
+                }
+                Some(hash_password_blocking(password).await?)
+            }
             None => None,
         };
 
         let mut conn = self.get_primary_conn().await?;
-        let key = Self::user_key(organization, username);
 
         // Get existing user from the primary for write consistency.
         let mut user = Self::get_user_with_conn(&mut conn, organization, username).await?;
