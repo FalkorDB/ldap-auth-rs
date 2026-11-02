@@ -175,6 +175,8 @@ API_PORT=8080
 LDAP_HOST=0.0.0.0
 LDAP_PORT=3893
 RUST_LOG=info
+REDIS_RESPONSE_TIMEOUT_MS=2000       # Per-command Redis reply timeout
+PASSWORD_VERIFY_CACHE_TTL_SECS=60    # Reuse successful binds for this long (0 disables, max 86400)
 
 # Redis read replica (optional)
 REDIS_REPLICA_HOST=redis-replica

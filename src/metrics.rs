@@ -63,6 +63,16 @@ pub mod custom {
         .expect("Failed to register ldap_binds counter")
     });
 
+    /// Password verifications served from the cache vs. run through Argon2
+    pub static PASSWORD_VERIFY_CACHE: Lazy<CounterVec> = Lazy::new(|| {
+        register_counter_vec!(
+            "ldap_password_verify_cache_total",
+            "Password verifications served from the cache (hit) or by Argon2 (miss)",
+            &["organization", "result"]
+        )
+        .expect("Failed to register password_verify_cache counter")
+    });
+
     /// Redis operation latency histogram
     #[allow(dead_code)]
     pub static REDIS_OPERATION_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
@@ -135,6 +145,14 @@ pub mod custom {
 pub fn record_auth_attempt(org: &str, success: bool) {
     let result = if success { "success" } else { "failure" };
     custom::AUTH_ATTEMPTS
+        .with_label_values(&[org, result])
+        .inc();
+}
+
+/// Record whether a password verification was served from the cache
+pub fn record_password_verify_cache(org: &str, hit: bool) {
+    let result = if hit { "hit" } else { "miss" };
+    custom::PASSWORD_VERIFY_CACHE
         .with_label_values(&[org, result])
         .inc();
 }
