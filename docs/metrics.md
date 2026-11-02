@@ -33,6 +33,10 @@ The service exposes:
   - Counter for LDAP bind operations
   - `result` is `success` or `failure`
 
+- `ldap_password_verify_cache_total{organization, result}`
+  - Counter for password verifications, by whether the verification cache answered
+  - `result` is `hit` (served from the cache) or `miss` (Argon2 ran)
+
 ### API Operation Counters
 
 - `ldap_user_operations_total{organization, operation, result}`
