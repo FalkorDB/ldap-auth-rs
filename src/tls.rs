@@ -378,23 +378,27 @@ mod tests {
         let (initial, installed) =
             load_tls_pair(&cert_path, &key_path).expect("initial cert loads");
         let ldap = ReloadableTlsConfig::new(initial.clone());
+        let api_initial = api_server_config(&initial);
+        let api = RustlsConfig::from_config(api_initial.clone());
         let handle = spawn_tls_reloader(
             cert_path.clone(),
             key_path.clone(),
             Duration::from_millis(50),
             installed,
             Some(ldap.clone()),
-            None,
+            Some(api.clone()),
         );
 
         // Unchanged files: nothing is reloaded.
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(Arc::ptr_eq(&ldap.current(), &initial));
+        assert!(Arc::ptr_eq(&api.get_inner(), &api_initial));
 
-        // A garbage key (half-written renewal): the current certificate stays.
+        // A garbage key (half-written renewal): the current certificate stays, on both listeners.
         std::fs::write(&key_path, b"not a key").unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(Arc::ptr_eq(&ldap.current(), &initial));
+        assert!(Arc::ptr_eq(&api.get_inner(), &api_initial));
 
         // The renewed pair lands: it is picked up.
         std::fs::copy(&new_cert, &cert_path).unwrap();
@@ -409,6 +413,17 @@ mod tests {
         }
         handle.abort();
         assert!(reloaded, "renewed certificate was not reloaded");
+
+        // The HTTPS API got the same renewal, still advertising HTTP/2 and HTTP/1.1.
+        let api_reloaded = api.get_inner();
+        assert!(
+            !Arc::ptr_eq(&api_reloaded, &api_initial),
+            "renewed certificate was not reloaded into the API"
+        );
+        assert_eq!(
+            api_reloaded.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
 
         for path in [cert_path, key_path, new_cert, new_key] {
             std::fs::remove_file(path).ok();
