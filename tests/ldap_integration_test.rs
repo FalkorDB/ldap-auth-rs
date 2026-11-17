@@ -69,6 +69,10 @@ async fn start_ldap_server_with_tls(
     let base_dn = "dc=example,dc=com".to_string();
     let server = LdapServer::new(db, base_dn, None);
 
+    // Test builds pull in both the ring and aws-lc-rs rustls providers (through dev
+    // dependencies), so rustls cannot pick one on its own: install the one the binary uses.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Generate test certificates
     let (cert_path, key_path) =
         tls::generate_test_certs().map_err(|e| format!("Failed to generate test certs: {}", e))?;
