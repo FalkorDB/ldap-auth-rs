@@ -1051,20 +1051,8 @@ async fn test_ldap_tls_serves_replaced_certificate_to_new_connections() {
     let db = setup_test_db().await;
     let port = 13411;
 
-    let (old_cert, old_key) = match tls::generate_test_certs() {
-        Ok(paths) => paths,
-        Err(e) => {
-            eprintln!("Skipping TLS reload test: {}", e);
-            return;
-        }
-    };
-    let (new_cert, new_key) = match tls::generate_test_certs() {
-        Ok(paths) => paths,
-        Err(e) => {
-            eprintln!("Skipping TLS reload test: {}", e);
-            return;
-        }
-    };
+    let (old_cert, old_key) = tls::generate_test_certs().expect("Failed to generate test certs");
+    let (new_cert, new_key) = tls::generate_test_certs().expect("Failed to generate test certs");
 
     let tls_config = tls::ReloadableTlsConfig::new(
         tls::load_tls_config(&old_cert, &old_key).expect("old cert loads"),

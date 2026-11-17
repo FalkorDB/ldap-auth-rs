@@ -59,7 +59,11 @@ pub const DEFAULT_TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 pub type PemPair = (Vec<u8>, Vec<u8>);
 
 fn read_pair(cert_path: &str, key_path: &str) -> std::io::Result<PemPair> {
-    Ok((std::fs::read(cert_path)?, std::fs::read(key_path)?))
+    // Name the file in the error: an operator needs to know which of the two is missing.
+    let read = |path: &str| {
+        std::fs::read(path).map_err(|e| std::io::Error::new(e.kind(), format!("{}: {}", path, e)))
+    };
+    Ok((read(cert_path)?, read(key_path)?))
 }
 
 /// Watch the certificate and key files and reload them when their contents change.
@@ -476,6 +480,14 @@ mod tests {
         for path in [cert_path, key_path, new_cert, new_key] {
             std::fs::remove_file(path).ok();
         }
+    }
+
+    #[test]
+    fn test_load_tls_pair_names_the_missing_file() {
+        let err = load_tls_pair("/nonexistent/cert.pem", "/nonexistent/key.pem")
+            .expect_err("missing files fail to load")
+            .to_string();
+        assert!(err.contains("/nonexistent/cert.pem"), "got: {}", err);
     }
 
     #[test]
