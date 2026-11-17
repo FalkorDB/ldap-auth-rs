@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Check spelling
-        uses: crate-ci/typos@d43b6c087ac471e2ea7b8af622ff15f05c0c365b
+        uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b
         with:
           files: |
             ./src
