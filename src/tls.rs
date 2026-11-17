@@ -85,7 +85,8 @@ pub fn spawn_tls_reloader(
     tokio::spawn(async move {
         let mut last_seen = installed;
 
-        let mut ticker = tokio::time::interval(interval);
+        // tokio::time::interval panics on a zero period, which would end the reloader.
+        let mut ticker = tokio::time::interval(interval.max(Duration::from_millis(1)));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await; // the first tick fires immediately
 
