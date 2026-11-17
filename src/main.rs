@@ -89,6 +89,34 @@ async fn main() -> anyhow::Result<()> {
     ) as Arc<dyn db::DbService>;
     info!("Redis connectivity initialized");
 
+    // Load TLS once for both listeners and keep it fresh: cert-manager renews the certificate
+    // in the mounted Secret, and without a reload the pods keep serving the old one until it
+    // expires.
+    let (ldap_tls, api_tls) = match (
+        &config.enable_tls,
+        &config.tls_cert_path,
+        &config.tls_key_path,
+    ) {
+        (true, Some(cert_path), Some(key_path)) => {
+            let (server_config, installed) = tls::load_tls_pair(cert_path, key_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
+            let ldap_tls = tls::ReloadableTlsConfig::new(server_config.clone());
+            let api_tls = axum_server::tls_rustls::RustlsConfig::from_config(
+                tls::api_server_config(&server_config),
+            );
+            tls::spawn_tls_reloader(
+                cert_path.clone(),
+                key_path.clone(),
+                tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                installed,
+                Some(ldap_tls.clone()),
+                Some(api_tls.clone()),
+            );
+            (Some(ldap_tls), Some(api_tls))
+        }
+        _ => (None, None),
+    };
+
     // Start API server with optional TLS
     let api_db = db.clone();
     let api_addr = config.api_address();
@@ -97,14 +125,10 @@ async fn main() -> anyhow::Result<()> {
         let app = api::create_router(api_db);
 
         if api_config.enable_tls {
-            if let (Some(cert_path), Some(key_path)) =
-                (&api_config.tls_cert_path, &api_config.tls_key_path)
-            {
+            if let (Some(_), Some(_)) = (&api_config.tls_cert_path, &api_config.tls_key_path) {
                 info!("Starting API server with TLS on {}", api_addr);
-                match axum_server::tls_rustls::RustlsConfig::from_pem_file(cert_path, key_path)
-                    .await
-                {
-                    Ok(tls_config) => {
+                match api_tls {
+                    Some(tls_config) => {
                         let addr: std::net::SocketAddr = api_addr.parse().map_err(|e| {
                             anyhow::anyhow!("Invalid API address {}: {}", api_addr, e)
                         })?;
@@ -113,8 +137,8 @@ async fn main() -> anyhow::Result<()> {
                             .await
                             .map_err(|e| anyhow::anyhow!("API server error: {}", e))?;
                     }
-                    Err(e) => {
-                        return Err(anyhow::anyhow!("Failed to load TLS config for API: {}", e));
+                    None => {
+                        return Err(anyhow::anyhow!("TLS config for API was not loaded"));
                     }
                 }
             } else {
@@ -144,14 +168,12 @@ async fn main() -> anyhow::Result<()> {
         let ldap_server = ldap::LdapServer::new(ldap_db, base_dn, search_bind_org);
 
         if ldap_config.enable_tls {
-            if let (Some(cert_path), Some(key_path)) =
-                (&ldap_config.tls_cert_path, &ldap_config.tls_key_path)
-            {
+            if let (Some(_), Some(_)) = (&ldap_config.tls_cert_path, &ldap_config.tls_key_path) {
                 info!("Starting LDAP server with TLS on {}", ldap_addr);
-                let tls_config = tls::load_tls_config(cert_path, key_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to load TLS config for LDAP: {}", e))?;
+                let tls_config = ldap_tls
+                    .ok_or_else(|| anyhow::anyhow!("TLS config for LDAP was not loaded"))?;
                 ldap_server
-                    .run_with_tls(&ldap_addr, tls_config)
+                    .run_with_reloadable_tls(&ldap_addr, tls_config)
                     .await
                     .map_err(|e| anyhow::anyhow!("LDAP server error: {}", e))?;
             } else {

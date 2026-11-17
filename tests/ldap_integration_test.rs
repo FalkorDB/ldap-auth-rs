@@ -69,6 +69,10 @@ async fn start_ldap_server_with_tls(
     let base_dn = "dc=example,dc=com".to_string();
     let server = LdapServer::new(db, base_dn, None);
 
+    // Test builds pull in both the ring and aws-lc-rs rustls providers (through dev
+    // dependencies), so rustls cannot pick one on its own: install the one the binary uses.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     // Generate test certificates
     let (cert_path, key_path) =
         tls::generate_test_certs().map_err(|e| format!("Failed to generate test certs: {}", e))?;
@@ -1016,4 +1020,69 @@ async fn test_ldap_invalid_credentials_tls() {
     db.delete_user("tlsinvalidorg", "tlsinvaliduser").await.ok();
     std::fs::remove_file(&cert_path).ok();
     std::fs::remove_file(&_key_path).ok();
+}
+
+/// Open a TLS connection to `port` trusting only the certificate in `cert_path`.
+async fn tls_handshake_trusting(port: u16, cert_path: &str) -> std::io::Result<()> {
+    let cert_file = std::fs::File::open(cert_path)?;
+    let mut reader = BufReader::new(cert_file);
+    let mut root_store = RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut reader) {
+        root_store
+            .add(cert?)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let tcp_stream = TcpStream::connect(format!("127.0.0.1:{}", port)).await?;
+    let server_name = ServerName::try_from("localhost").expect("valid server name");
+    TlsConnector::from(Arc::new(config))
+        .connect(server_name, tcp_stream)
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn test_ldap_tls_serves_replaced_certificate_to_new_connections() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let db = setup_test_db().await;
+    let port = 13411;
+
+    let (old_cert, old_key) = tls::generate_test_certs().expect("Failed to generate test certs");
+    let (new_cert, new_key) = tls::generate_test_certs().expect("Failed to generate test certs");
+
+    let tls_config = tls::ReloadableTlsConfig::new(
+        tls::load_tls_config(&old_cert, &old_key).expect("old cert loads"),
+    );
+    let server = LdapServer::new(db, "dc=example,dc=com".to_string(), None);
+    let server_tls = tls_config.clone();
+    let addr = format!("127.0.0.1:{}", port);
+    let handle = tokio::spawn(async move {
+        if let Err(e) = server.run_with_reloadable_tls(&addr, server_tls).await {
+            eprintln!("LDAP TLS server error: {}", e);
+        }
+    });
+    sleep(Duration::from_millis(200)).await;
+
+    tls_handshake_trusting(port, &old_cert)
+        .await
+        .expect("serves the original certificate");
+
+    tls_config.replace(tls::load_tls_config(&new_cert, &new_key).expect("new cert loads"));
+
+    tls_handshake_trusting(port, &new_cert)
+        .await
+        .expect("a new connection gets the replaced certificate");
+    assert!(
+        tls_handshake_trusting(port, &old_cert).await.is_err(),
+        "the original certificate is still being served after replace"
+    );
+
+    handle.abort();
+    for path in [old_cert, old_key, new_cert, new_key] {
+        std::fs::remove_file(path).ok();
+    }
 }
