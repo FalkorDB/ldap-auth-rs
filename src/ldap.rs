@@ -70,6 +70,7 @@ use crate::ldap_lib::{
     create_whoami_response,
 };
 use crate::metrics;
+use crate::tls::ReloadableTlsConfig;
 
 /// LDAP message types
 #[derive(Debug)]
@@ -143,19 +144,31 @@ impl LdapServer {
     }
 
     /// Start the LDAP server with TLS
+    #[allow(dead_code)] // used by the library API and tests; the binary uses the reloadable variant
     pub async fn run_with_tls(&self, addr: &str, tls_config: Arc<ServerConfig>) -> Result<()> {
+        self.run_with_reloadable_tls(addr, ReloadableTlsConfig::new(tls_config))
+            .await
+    }
+
+    /// Start the LDAP server with TLS, taking the certificate for each new connection from
+    /// `tls_config`, so a certificate swapped in by [`crate::tls::spawn_tls_reloader`] is served
+    /// without a restart.
+    pub async fn run_with_reloadable_tls(
+        &self,
+        addr: &str,
+        tls_config: ReloadableTlsConfig,
+    ) -> Result<()> {
         let listener = TcpListener::bind(addr).await.map_err(|e| {
             crate::error::AppError::Internal(format!("Failed to bind LDAP server: {}", e))
         })?;
 
-        let acceptor = TlsAcceptor::from(tls_config);
         info!("LDAP server with TLS listening on {}", addr);
 
         loop {
             match listener.accept().await {
                 Ok((socket, client_addr)) => {
                     debug!("New LDAP connection from {}", client_addr);
-                    let acceptor = acceptor.clone();
+                    let acceptor = TlsAcceptor::from(tls_config.current());
                     let db = self.db.clone();
                     let base_dn = self.base_dn.clone();
                     let search_bind_org = self.search_bind_org.clone();

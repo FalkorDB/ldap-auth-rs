@@ -1,11 +1,143 @@
+use axum_server::tls_rustls::RustlsConfig;
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tracing::{info, warn};
 
 use crate::error::{AppError, Result};
+
+/// A TLS server config that can be swapped while the server runs.
+///
+/// Each new connection reads the current config, so a renewed certificate is used for every
+/// handshake after the swap, while connections already open keep the session they negotiated.
+#[derive(Clone)]
+pub struct ReloadableTlsConfig {
+    current: Arc<RwLock<Arc<ServerConfig>>>,
+}
+
+impl ReloadableTlsConfig {
+    pub fn new(config: Arc<ServerConfig>) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(config)),
+        }
+    }
+
+    /// The config to use for the next handshake.
+    pub fn current(&self) -> Arc<ServerConfig> {
+        // A poisoned lock still holds a valid config: the only writer is a plain assignment.
+        match self.current.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    pub fn replace(&self, config: Arc<ServerConfig>) {
+        match self.current.write() {
+            Ok(mut guard) => *guard = config,
+            Err(poisoned) => *poisoned.into_inner() = config,
+        }
+    }
+}
+
+impl From<Arc<ServerConfig>> for ReloadableTlsConfig {
+    fn from(config: Arc<ServerConfig>) -> Self {
+        Self::new(config)
+    }
+}
+
+/// How often the certificate files are checked for a renewal.
+///
+/// cert-manager renews well ahead of expiry and the kubelet takes up to a minute or so to
+/// project an updated Secret into the pod, so a short interval buys nothing.
+pub const DEFAULT_TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
+
+fn read_pair(cert_path: &str, key_path: &str) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+    Ok((std::fs::read(cert_path)?, std::fs::read(key_path)?))
+}
+
+/// Watch the certificate and key files and reload them when their contents change.
+///
+/// A Kubernetes Secret volume (cert-manager's renewed certificate) is updated in place by
+/// swapping a symlink, so the files are compared by content, not by inode or mtime. A new pair
+/// that fails to load, or that changes again while it is being loaded (a read that straddled
+/// the swap), is not applied: the current certificate stays in use and the next tick retries.
+///
+/// A loaded pair is applied to the LDAP listener (`ldap`) and the HTTPS API (`api`).
+pub fn spawn_tls_reloader(
+    cert_path: String,
+    key_path: String,
+    interval: Duration,
+    ldap: Option<ReloadableTlsConfig>,
+    api: Option<RustlsConfig>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_seen = match read_pair(&cert_path, &key_path) {
+            Ok(pair) => Some(pair),
+            Err(e) => {
+                warn!("TLS reloader: cannot read certificate files yet: {}", e);
+                None
+            }
+        };
+
+        let mut ticker = tokio::time::interval(interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await; // the first tick fires immediately
+
+        loop {
+            ticker.tick().await;
+
+            let pair = match read_pair(&cert_path, &key_path) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    warn!("TLS reloader: cannot read certificate files: {}", e);
+                    continue;
+                }
+            };
+            if last_seen.as_ref() == Some(&pair) {
+                continue;
+            }
+
+            let config = match load_tls_config(&cert_path, &key_path) {
+                Ok(config) => config,
+                Err(e) => {
+                    warn!(
+                        "TLS reloader: certificate files changed but did not load, keeping the current certificate: {}",
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // The files must not have moved on while they were parsed, or the cert and key
+            // just loaded may come from two different Secret versions.
+            match read_pair(&cert_path, &key_path) {
+                Ok(again) if again == pair => {}
+                _ => continue,
+            }
+
+            if let Some(api) = &api {
+                api.reload_from_config(api_server_config(&config));
+            }
+            if let Some(ldap) = &ldap {
+                ldap.replace(config);
+            }
+            last_seen = Some(pair);
+            info!("TLS certificate reloaded from {}", cert_path);
+        }
+    })
+}
+
+/// The API's TLS config: the LDAP one plus the HTTP ALPN protocols that
+/// `RustlsConfig::from_pem_file` would have set.
+pub fn api_server_config(config: &Arc<ServerConfig>) -> Arc<ServerConfig> {
+    let mut config = (**config).clone();
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Arc::new(config)
+}
 
 /// Load TLS configuration from certificate and key files
 pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConfig>> {
@@ -155,7 +287,7 @@ pub fn generate_test_certs() -> Result<(String, String)> {
             key_path_str,
             "-out",
             cert_path_str,
-            "- days",
+            "-days",
             "1",
             "-subj",
             "/CN=localhost",
@@ -215,6 +347,57 @@ mod tests {
         // Cleanup
         std::fs::remove_file(cert_path).ok();
         std::fs::remove_file(key_path).ok();
+    }
+
+    #[tokio::test]
+    async fn test_tls_reloader_picks_up_renewed_certificate() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let Ok((cert_path, key_path)) = generate_test_certs() else {
+            eprintln!("Warning: openssl not available, skipping");
+            return;
+        };
+        let Ok((new_cert, new_key)) = generate_test_certs() else {
+            eprintln!("Warning: openssl not available, skipping");
+            return;
+        };
+
+        let initial = load_tls_config(&cert_path, &key_path).expect("initial cert loads");
+        let ldap = ReloadableTlsConfig::new(initial.clone());
+        let handle = spawn_tls_reloader(
+            cert_path.clone(),
+            key_path.clone(),
+            Duration::from_millis(50),
+            Some(ldap.clone()),
+            None,
+        );
+
+        // Unchanged files: nothing is reloaded.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(Arc::ptr_eq(&ldap.current(), &initial));
+
+        // A garbage key (half-written renewal): the current certificate stays.
+        std::fs::write(&key_path, b"not a key").unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(Arc::ptr_eq(&ldap.current(), &initial));
+
+        // The renewed pair lands: it is picked up.
+        std::fs::copy(&new_cert, &cert_path).unwrap();
+        std::fs::copy(&new_key, &key_path).unwrap();
+        let mut reloaded = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if !Arc::ptr_eq(&ldap.current(), &initial) {
+                reloaded = true;
+                break;
+            }
+        }
+        handle.abort();
+        assert!(reloaded, "renewed certificate was not reloaded");
+
+        for path in [cert_path, key_path, new_cert, new_key] {
+            std::fs::remove_file(path).ok();
+        }
     }
 
     #[test]
