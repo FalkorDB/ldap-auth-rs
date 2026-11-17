@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         &config.tls_key_path,
     ) {
         (true, Some(cert_path), Some(key_path)) => {
-            let server_config = tls::load_tls_config(cert_path, key_path)
+            let (server_config, installed) = tls::load_tls_pair(cert_path, key_path)
                 .map_err(|e| anyhow::anyhow!("Failed to load TLS config: {}", e))?;
             let ldap_tls = tls::ReloadableTlsConfig::new(server_config.clone());
             let api_tls = axum_server::tls_rustls::RustlsConfig::from_config(
@@ -108,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
                 cert_path.clone(),
                 key_path.clone(),
                 tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                installed,
                 Some(ldap_tls.clone()),
                 Some(api_tls.clone()),
             );

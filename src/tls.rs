@@ -55,7 +55,10 @@ impl From<Arc<ServerConfig>> for ReloadableTlsConfig {
 /// project an updated Secret into the pod, so a short interval buys nothing.
 pub const DEFAULT_TLS_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 
-fn read_pair(cert_path: &str, key_path: &str) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+/// The PEM bytes of a certificate chain and its private key, as read from disk.
+pub type PemPair = (Vec<u8>, Vec<u8>);
+
+fn read_pair(cert_path: &str, key_path: &str) -> std::io::Result<PemPair> {
     Ok((std::fs::read(cert_path)?, std::fs::read(key_path)?))
 }
 
@@ -66,22 +69,21 @@ fn read_pair(cert_path: &str, key_path: &str) -> std::io::Result<(Vec<u8>, Vec<u
 /// that fails to load, or that changes again while it is being loaded (a read that straddled
 /// the swap), is not applied: the current certificate stays in use and the next tick retries.
 ///
+/// `installed` is the pair the listeners are serving now, as returned by [`load_tls_pair`]. It
+/// must be the bytes the installed config was built from, not a fresh read: a renewal landing
+/// between startup and the first check would otherwise be taken as already applied.
+///
 /// A loaded pair is applied to the LDAP listener (`ldap`) and the HTTPS API (`api`).
 pub fn spawn_tls_reloader(
     cert_path: String,
     key_path: String,
     interval: Duration,
+    installed: PemPair,
     ldap: Option<ReloadableTlsConfig>,
     api: Option<RustlsConfig>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut last_seen = match read_pair(&cert_path, &key_path) {
-            Ok(pair) => Some(pair),
-            Err(e) => {
-                warn!("TLS reloader: cannot read certificate files yet: {}", e);
-                None
-            }
-        };
+        let mut last_seen = installed;
 
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -97,11 +99,11 @@ pub fn spawn_tls_reloader(
                     continue;
                 }
             };
-            if last_seen.as_ref() == Some(&pair) {
+            if last_seen == pair {
                 continue;
             }
 
-            let config = match load_tls_config(&cert_path, &key_path) {
+            let config = match load_tls_config_from_pem(&pair.0, &pair.1) {
                 Ok(config) => config,
                 Err(e) => {
                     warn!(
@@ -112,8 +114,9 @@ pub fn spawn_tls_reloader(
                 }
             };
 
-            // The files must not have moved on while they were parsed, or the cert and key
-            // just loaded may come from two different Secret versions.
+            // The cert and key are read one after the other, so a read that straddled a Secret
+            // update may pair a cert with the other version's key: apply only a pair that reads
+            // back the same.
             match read_pair(&cert_path, &key_path) {
                 Ok(again) if again == pair => {}
                 _ => continue,
@@ -125,7 +128,7 @@ pub fn spawn_tls_reloader(
             if let Some(ldap) = &ldap {
                 ldap.replace(config);
             }
-            last_seen = Some(pair);
+            last_seen = pair;
             info!("TLS certificate reloaded from {}", cert_path);
         }
     })
@@ -140,11 +143,24 @@ pub fn api_server_config(config: &Arc<ServerConfig>) -> Arc<ServerConfig> {
 }
 
 /// Load TLS configuration from certificate and key files
+#[allow(dead_code)] // used by the library API and tests; the binary uses `load_tls_pair`
 pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConfig>> {
+    load_tls_pair(cert_path, key_path).map(|(config, _)| config)
+}
+
+/// Load TLS configuration from certificate and key files, also returning the exact bytes it was
+/// built from, which is the baseline [`spawn_tls_reloader`] compares the files against.
+pub fn load_tls_pair(cert_path: &str, key_path: &str) -> Result<(Arc<ServerConfig>, PemPair)> {
+    let pair = read_pair(cert_path, key_path)
+        .map_err(|e| AppError::Internal(format!("Failed to read certificate files: {}", e)))?;
+    let config = load_tls_config_from_pem(&pair.0, &pair.1)?;
+    Ok((config, pair))
+}
+
+/// Build a TLS configuration from PEM-encoded certificate chain and private key bytes.
+pub fn load_tls_config_from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<Arc<ServerConfig>> {
     // Load certificates
-    let cert_file = File::open(cert_path)
-        .map_err(|e| AppError::Internal(format!("Failed to open certificate file: {}", e)))?;
-    let mut cert_reader = BufReader::new(cert_file);
+    let mut cert_reader = BufReader::new(cert_pem);
     let certs: Vec<CertificateDer<'static>> = certs(&mut cert_reader)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| AppError::Internal(format!("Failed to parse certificates: {}", e)))?;
@@ -159,9 +175,7 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
     // cert-manager commonly emits RSA keys in PKCS#1 (tls.key) when `privateKey.encoding=PKCS1`.
     // rustls supports PKCS#1 and PKCS#8, so we accept either.
     let mut pkcs8_keys = {
-        let key_file = File::open(key_path)
-            .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
-        let mut key_reader = BufReader::new(key_file);
+        let mut key_reader = BufReader::new(key_pem);
         pkcs8_private_keys(&mut key_reader)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?
@@ -171,9 +185,7 @@ pub fn load_tls_config(cert_path: &str, key_path: &str) -> Result<Arc<ServerConf
         PrivateKeyDer::Pkcs8(key)
     } else {
         let mut rsa_keys = {
-            let key_file = File::open(key_path)
-                .map_err(|e| AppError::Internal(format!("Failed to open key file: {}", e)))?;
-            let mut key_reader = BufReader::new(key_file);
+            let mut key_reader = BufReader::new(key_pem);
             rsa_private_keys(&mut key_reader)
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|e| AppError::Internal(format!("Failed to parse private keys: {}", e)))?
@@ -362,12 +374,14 @@ mod tests {
             return;
         };
 
-        let initial = load_tls_config(&cert_path, &key_path).expect("initial cert loads");
+        let (initial, installed) =
+            load_tls_pair(&cert_path, &key_path).expect("initial cert loads");
         let ldap = ReloadableTlsConfig::new(initial.clone());
         let handle = spawn_tls_reloader(
             cert_path.clone(),
             key_path.clone(),
             Duration::from_millis(50),
+            installed,
             Some(ldap.clone()),
             None,
         );
@@ -394,6 +408,54 @@ mod tests {
         }
         handle.abort();
         assert!(reloaded, "renewed certificate was not reloaded");
+
+        for path in [cert_path, key_path, new_cert, new_key] {
+            std::fs::remove_file(path).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tls_reloader_applies_renewal_that_landed_before_it_started() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let Ok((cert_path, key_path)) = generate_test_certs() else {
+            eprintln!("Warning: openssl not available, skipping");
+            return;
+        };
+        let Ok((new_cert, new_key)) = generate_test_certs() else {
+            eprintln!("Warning: openssl not available, skipping");
+            return;
+        };
+
+        // Startup loads the old pair, then the renewal lands before the reloader runs.
+        let (initial, installed) =
+            load_tls_pair(&cert_path, &key_path).expect("initial cert loads");
+        std::fs::copy(&new_cert, &cert_path).unwrap();
+        std::fs::copy(&new_key, &key_path).unwrap();
+
+        let ldap = ReloadableTlsConfig::new(initial.clone());
+        let handle = spawn_tls_reloader(
+            cert_path.clone(),
+            key_path.clone(),
+            Duration::from_millis(50),
+            installed,
+            Some(ldap.clone()),
+            None,
+        );
+
+        let mut reloaded = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if !Arc::ptr_eq(&ldap.current(), &initial) {
+                reloaded = true;
+                break;
+            }
+        }
+        handle.abort();
+        assert!(
+            reloaded,
+            "renewal that landed before the reloader started was not applied"
+        );
 
         for path in [cert_path, key_path, new_cert, new_key] {
             std::fs::remove_file(path).ok();
